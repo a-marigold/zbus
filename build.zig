@@ -5,19 +5,18 @@ pub fn build(b: *Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const rootMod = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
+    const rootMod = b.addModule("zbus", .{
+        .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const exe = b.addExecutable(.{
+    const lib = b.addLibrary(.{
         .name = "zbus",
         .root_module = rootMod,
+        .linkage = .static,
     });
 
-    b.installArtifact(exe);
-
     const checkStep = b.step("check", "Build on save");
-    checkStep.dependOn(&exe.step);
+    checkStep.dependOn(&lib.step);
 }
