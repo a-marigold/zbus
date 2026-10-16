@@ -51,6 +51,31 @@ pub const UnixSocket = struct {
 
         if (connectResult == -1) return ConnectError.ConnectFail;
     }
+
+    pub const WriteError = error{WriteFail};
+
+    pub inline fn writeByte(self: @This(), data: u8) WriteError!void {
+        const dataLen = 1;
+        const writtenBytes = linux.write(self.fd, &data, dataLen);
+
+        if (writtenBytes != 1) return WriteError.WriteFail;
+    }
+
+    pub inline fn writeAll(self: @This(), data: []const u8) WriteError!void {
+        var remainingData = data;
+        while (remainingData.len != 0) {
+            const writtenBytes = linux.write(self.fd, remainingData, remainingData.len);
+
+            if (writtenBytes < 0) switch (linux.errno(writtenBytes)) {
+                linux.E.INTR => continue,
+                else => return WriteError.WriteFail,
+            };
+
+            if (writtenBytes == 0) continue;
+
+            remainingData = remainingData[writtenBytes..];
+        }
+    }
 };
 
 pub fn getUid() u32 {
