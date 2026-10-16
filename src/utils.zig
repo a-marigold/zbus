@@ -40,6 +40,17 @@ pub const UnixSocket = struct {
 
         return .{ .fd = fd };
     }
+
+    pub const ConnectError = error{ConnectFail};
+    pub inline fn connect(self: @This(), addr: Addr) ConnectError!void {
+        const connectResult = linux.connect(
+            self.fd,
+            addr.addr,
+            addr.size,
+        );
+
+        if (connectResult == -1) return ConnectError.ConnectFail;
+    }
 };
 
 pub fn getUid() u32 {
