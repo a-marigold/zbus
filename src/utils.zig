@@ -41,3 +41,7 @@ pub const UnixSocket = struct {
         return .{ .fd = fd };
     }
 };
+
+pub fn getUid() u32 {
+    return linux.getuid();
+}
