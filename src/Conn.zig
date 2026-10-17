@@ -20,24 +20,28 @@ stream: net.Stream,
 reader: net.Stream.Reader,
 writer: net.Stream.Writer,
 
-pub const InitError = error{ BusPathTooLong, ConnectFail, AuthFail };
+pub const InitError = error{
+    BusPathTooLong,
+    ConnectFail,
+    AuthFail,
+};
 /// Creates a socket, initializes connection to
 /// the D-Bus broker and authentificates the connection.
-pub fn init(io: Io, readerBuffer: []u8, busPath: [:0]const u8, comptime options: Options) InitError!@This() {
+pub fn init(io: Io, busPath: [:0]const u8, comptime options: Options) InitError!@This() {
     const socket: net.UnixAddress = .init(busPath) catch return InitError.BusPathTooLong;
 
     const stream = socket.connect(io) catch return InitError.ConnectFail;
     errdefer stream.close();
 
-    var reader = stream.reader(io, readerBuffer);
+    var reader = stream.reader(io, options.readerBuffer);
     const ioReader = &reader.interface;
 
-    // TODO: Unbuffered writer
-    var writer = stream.writer(io, &.{});
+    var writer = stream.writer(io, options.writerBuffer);
     const ioWriter = &writer.interface;
 
     // Credentials passing as per the protocol
     ioWriter.writeByte(0);
+    ioWriter.flush();
 
     // EXTERNAL mechanism of SASL
     const hexUidString = block: {
@@ -53,12 +57,24 @@ pub fn init(io: Io, readerBuffer: []u8, busPath: [:0]const u8, comptime options:
         break :block mem.print(&buffer, "{X}", .{uidString}) catch unreachable;
     };
     ioWriter.print("AUTH EXTERNAL {s}\r\n", .{hexUidString});
+    ioWriter.flush();
 
     const authResponse = ioReader.takeDelimiterInclusive('\n') catch return InitError.AuthFail;
 
     if (!mem.startsWith(u8, authResponse, "OK")) return InitError.AuthFail;
 
+    if (comptime options.isNegotiateUnixFd) {
+        ioWriter.writeAll("NEGOTIATE_UNIX_FD\r\n");
+        ioWriter.flush();
+
+        const negotiateUnixFdResponse = ioReader.takeDelimiterInclusive('\n');
+
+        if (!mem.startsWith(u8, negotiateUnixFdResponse, "AGREE_UNIX_FD"))
+            return InitError.AuthFail;
+    }
+
     ioWriter.writeAll("BEGIN") catch return InitError.AuthFail;
+    ioWriter.flush();
 
     return .{
         .stream = stream,
@@ -70,6 +86,9 @@ pub fn init(io: Io, readerBuffer: []u8, busPath: [:0]const u8, comptime options:
 const Options = struct {
     /// Whether to allow passing UNIX fds over the connection.
     isNegotiateUnixFd: bool,
+
+    readerBuffer: []const u8,
+    writerBuffer: []const u8,
 };
 
 /// Returns fd of the underlying socket.
