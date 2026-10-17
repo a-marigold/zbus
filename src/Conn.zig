@@ -25,8 +25,8 @@ pub const InitError = error{
     ConnectFail,
     AuthFail,
 };
-/// Creates a socket, initializes connection to
-/// the D-Bus broker and authentificates the connection.
+/// Creates a socket, connects to the D-Bus broker by `busPath`,
+/// authentificates the connection and says Hello.
 pub fn init(io: Io, busPath: [:0]const u8, comptime options: Options) InitError!@This() {
     const socket: net.UnixAddress = .init(busPath) catch return InitError.BusPathTooLong;
 
@@ -43,7 +43,7 @@ pub fn init(io: Io, busPath: [:0]const u8, comptime options: Options) InitError!
     ioWriter.writeByte(0);
     ioWriter.flush();
 
-    // EXTERNAL mechanism of SASL
+    // `AUTH EXTERNAL` command
     const hexUidString = block: {
         const uid = utils.getUid();
 
@@ -56,6 +56,7 @@ pub fn init(io: Io, busPath: [:0]const u8, comptime options: Options) InitError!
 
         break :block mem.print(&buffer, "{X}", .{uidString}) catch unreachable;
     };
+
     ioWriter.print("AUTH EXTERNAL {s}\r\n", .{hexUidString});
     ioWriter.flush();
 
@@ -63,6 +64,7 @@ pub fn init(io: Io, busPath: [:0]const u8, comptime options: Options) InitError!
 
     if (!mem.startsWith(u8, authResponse, "OK")) return InitError.AuthFail;
 
+    // `NEGOTIATE_UNIX_FD` command
     if (comptime options.isNegotiateUnixFd) {
         ioWriter.writeAll("NEGOTIATE_UNIX_FD\r\n");
         ioWriter.flush();
@@ -73,7 +75,8 @@ pub fn init(io: Io, busPath: [:0]const u8, comptime options: Options) InitError!
             return InitError.AuthFail;
     }
 
-    ioWriter.writeAll("BEGIN") catch return InitError.AuthFail;
+    // `BEGIN` command
+    ioWriter.writeAll("BEGIN\r\n") catch return InitError.AuthFail;
     ioWriter.flush();
 
     return .{
@@ -91,6 +94,14 @@ const Options = struct {
     writerBuffer: []const u8,
 };
 
+pub inline fn getReader(self: *@This()) *Io.Reader {
+    return &self.reader.interface;
+}
+
+pub inline fn getWriter(self: *@This()) *Io.Writer {
+    return &self.writer.interface;
+}
+
 /// Returns fd of the underlying socket.
 ///
 /// The socket is:
@@ -103,7 +114,7 @@ const Options = struct {
 ///
 /// Parameters of the socket can be safely changed
 /// because the library doesn't rely on them.
-pub inline fn getSocketFd(self: @This()) posix.fd_t {
+pub inline fn getSocketFd(self: *@This()) posix.fd_t {
     return self.stream.socket.handle;
 }
 
