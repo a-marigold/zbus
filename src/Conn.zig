@@ -72,6 +72,22 @@ const Options = struct {
     isNegotiateUnixFd: bool,
 };
 
+/// Returns fd of the underlying socket.
+///
+/// The socket is:
+/// - UNIX domain
+/// - blocking
+/// - connected to the D-Bus broker
+/// - authentificated with SASL
+///
+/// Client hello is sent.
+///
+/// Parameters of the socket can be safely changed
+/// because the library doesn't rely on them.
+pub inline fn getSocketFd(self: @This()) posix.fd_t {
+    return self.stream.socket.handle;
+}
+
 pub const BusType = enum { System, Session };
 
 pub const BusPathError = error{ PathNotFound, InvalidPath };
