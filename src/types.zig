@@ -5,6 +5,22 @@
 //!
 //! https://dbus.freedesktop.org/doc/dbus-specification.html#type-system
 
+const std = @import("std");
+const posix = std.posix;
+
+/// `u8`, `u16`, `u32`, `u64`,
+/// `i16`, `i32`, `i64`,
+/// `f64`.
+pub fn Number(comptime T: type) type {
+    return struct {
+        number: T,
+
+        pub const __IS_ZBUS_INT__ = true;
+    };
+}
+pub const Bool = bool;
+
+pub const UnixFd = struct { fd: posix.fd_t };
 pub const String = [:0]const u8;
 
 pub const ObjectPath = struct { path: [:0]const u8 };
