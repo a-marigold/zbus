@@ -1,7 +1,7 @@
 //! D-Bus type wrappers used to be recognized
 //! by message serialization and parsing functions.
 //!
-//! Implements every type in accordance to the specification:
+//! Implements every type in accordance with the specification:
 //!
 //! https://dbus.freedesktop.org/doc/dbus-specification.html#type-system
 
@@ -18,12 +18,19 @@ pub fn Number(comptime T: type) type {
         pub const __IS_ZBUS_INT__ = true;
     };
 }
+pub inline fn isNumber(comptime T: type) type {
+    return @hasField(T, "__IS_ZBUS_INT__");
+}
+
 pub const Bool = bool;
 
 pub const UnixFd = struct { fd: posix.fd_t };
+
 pub const String = [:0]const u8;
 
 pub const ObjectPath = struct { path: [:0]const u8 };
+
+pub const Signature = struct { signature: [:0]const u8 };
 
 /// Returns a D-Bus struct, created from zig's struct `T`.
 pub fn Struct(comptime T: type) type {
@@ -39,7 +46,7 @@ pub fn Struct(comptime T: type) type {
         }
     };
 }
-pub fn isStruct(comptime T: type) bool {
+pub inline fn isStruct(comptime T: type) bool {
     return @hasField(T, "__IS_ZBUS_STRUCT__");
 }
 
@@ -57,7 +64,7 @@ pub fn Array(comptime E: type) type {
         }
     };
 }
-pub fn isArray(comptime T: type) bool {
+pub inline fn isArray(comptime T: type) bool {
     return @hasField(T, "__IS_ZBUS_ARRAY__");
 }
 
@@ -78,27 +85,41 @@ pub fn DictEntry(comptime K: type, comptime V: type) type {
         }
     };
 }
-pub fn isDictEntry(comptime T: type) bool {
+pub inline fn isDictEntry(comptime T: type) bool {
     return @hasField(T, "__IS_ZBUS_DICT_ENTRY__");
 }
 
 /// Creates a Variant D-Bus type representation.
 ///
 /// `T` is a union-type of the Variant.
-pub fn Variant(comptime T: type) type {
+///
+/// Example:
+/// ```zig
+/// const IntOrObject = union(enum) {
+///   int: Number(u64),
+///   object: ObjectPath,
+/// };
+///
+/// const IntOrObjectVariant = Variant(IntOrObject);
+///
+/// const intOrObject: IntOrObjectVariant = .init(.{ .int = 16 });
+/// _ = intOrObject.int;
+/// ```
+pub fn Variant(comptime U: type) type {
     return struct {
-        variant: T,
+        variant: U,
 
-        pub const Type = T;
+        pub const Type = U;
 
         pub const __IS_ZBUS_VARIANT__ = true;
 
-        pub fn init(variant: T) @This() {
+        pub fn init(variant: U) @This() {
             return .{ .variant = variant };
         }
     };
 }
-pub fn isVariant(comptime T: type) bool {
+
+pub inline fn isVariant(comptime T: type) bool {
     return @hasField(T, "__IS_ZBUS_VARIANT__");
 }
 
@@ -118,7 +139,7 @@ pub fn Prop(comptime name: [:0]const u8, comptime V: type, comptime mode: enum {
         }
     };
 }
-pub fn isProp(comptime T: type) bool {
+pub inline fn isProp(comptime T: type) bool {
     return @hasField(T, "__IS_ZBUS_PROP__");
 }
 
@@ -134,7 +155,7 @@ pub fn Signal(comptime name: [:0]const u8) type {
         }
     };
 }
-pub fn isSignal(comptime T: type) bool {
+pub inline fn isSignal(comptime T: type) bool {
     return @hasField(T, "__IS_ZBUS_SIGNAL__");
 }
 
@@ -153,7 +174,7 @@ pub fn Method(comptime name: [:0]const u8, comptime Callback: type) type {
         }
     };
 }
-pub fn isMethod(comptime T: type) bool {
+pub inline fn isMethod(comptime T: type) bool {
     return @hasField(T, "__IS_ZBUS_METHOD__");
 }
 
@@ -196,6 +217,6 @@ pub fn Interface(
         }
     };
 }
-pub fn isInterface(comptime T: type) bool {
+pub inline fn isInterface(comptime T: type) bool {
     return @hasField(T, "__IS_ZBUS_INTERFACE__");
 }
