@@ -18,6 +18,8 @@ body: [*]const u8,
 
 /// Recursively (for containers) serializes `value` and writes the result to `writer`.
 ///
+/// UTF-8 in strings is not validated.
+///
 /// Follows the passed `endian`, but in this library, it is better to use the native endian.
 pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: lang.Endian) !void {
     switch (T) {
@@ -29,6 +31,7 @@ pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: la
             try writer.writeInt(u32, @intCast(slice.len), endian);
             try writer.writeAll(slice);
         },
+        types.Signature => try serializeSignature(writer, value),
         else => if (types.isStruct(T)) {
             const info: lang.Type.Struct = @typeInfo(T).@"struct";
 
@@ -58,8 +61,32 @@ pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: la
             for (value.array) |el| try serializeValue(writer, ElType, el, endian);
         } else if (types.isVariant(T)) {
             // TODO: variant
+            const info: lang.Type.Union = @typeInfo(T).@"union";
+            const TagType = info.tag_type.?;
+
+            const tag: TagType = value;
+
+            inline for (info.field_names, info.field_types) |fieldName, FieldType| {
+                const fieldTagValue = @field(TagType, fieldName);
+                if (fieldTagValue == tag) {
+                    try serializeSignature(
+                        writer,
+                        types.Signature{ .signature = signatureFromType(FieldType) },
+                    );
+                    try serializeValue(
+                        writer,
+                        FieldType,
+                        @field(value, fieldName),
+                        endian,
+                    );
+                }
+            }
         },
     }
+}
+inline fn serializeSignature(writer: *Io.Writer, signature: types.Signature) !void {
+    try writer.writeByte(signature.signature.len);
+    try writer.writeAll(signature.signature);
 }
 
 /// Returns a comptime string of signature corresponding to `T`.
