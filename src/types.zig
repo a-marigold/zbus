@@ -8,41 +8,60 @@
 const std = @import("std");
 const posix = std.posix;
 
-/// `u8`, `u16`, `u32`, `u64`,
-/// `i16`, `i32`, `i64`,
+/// `T` is `u8`, `u16`, `u32`, `u64`,
+/// `i16`, `i32`, `i64` or
 /// `f64`.
 pub fn Number(comptime T: type) type {
     return struct {
         number: T,
 
-        pub const __IS_ZBUS_INT__ = true;
+        pub const __IS_ZBUS_NUMBER__ = true;
+
+        pub fn init(number: T) @This() {
+            return .{ .number = number };
+        }
     };
 }
 pub inline fn isNumber(comptime T: type) type {
-    return @hasField(T, "__IS_ZBUS_INT__");
+    return @hasField(T, "__IS_ZBUS_NUMBER__");
 }
 
 pub const Bool = bool;
 
-pub const UnixFd = struct { fd: posix.fd_t };
+pub const UnixFd = struct {
+    fd: posix.fd_t,
+
+    pub fn init(fd: posix.fd_t) @This() {
+        return .{ .fd = fd };
+    }
+};
 
 pub const String = [:0]const u8;
 
-pub const ObjectPath = struct { path: [:0]const u8 };
+pub const ObjectPath = struct {
+    path: [:0]const u8,
 
-pub const Signature = struct { signature: [:0]const u8 };
+    pub fn init(path: [:0]const u8) @This() {
+        return .{ .path = path };
+    }
+};
+
+pub const Signature = struct {
+    signature: [:0]const u8,
+    pub fn init(signature: [:0]const u8) @This() {
+        return .{ .signature = signature };
+    }
+};
 
 /// Returns a D-Bus struct, created from zig's struct `T`.
 pub fn Struct(comptime T: type) type {
     return struct {
         @"struct": T,
 
-        pub const Type = T;
-
         pub const __IS_ZBUS_STRUCT__ = true;
 
-        pub fn init(value: T) @This() {
-            return .{ .@"struct" = value };
+        pub fn init(@"struct": T) @This() {
+            return .{ .@"struct" = @"struct" };
         }
     };
 }
@@ -54,8 +73,6 @@ pub inline fn isStruct(comptime T: type) bool {
 pub fn Array(comptime E: type) type {
     return struct {
         array: []const E,
-
-        pub const Element = E;
 
         pub const __IS_ZBUS_ARRAY__ = true;
 
@@ -75,13 +92,10 @@ pub fn DictEntry(comptime K: type, comptime V: type) type {
     return struct {
         entry: Entry,
 
-        pub const Key = K;
-        pub const Value = V;
-
         pub const __IS_ZBUS_DICT_ENTRY__ = true;
 
-        pub fn init(entry: Entry) @This() {
-            return .{ .entry = entry };
+        pub fn init(key: K, value: V) @This() {
+            return .{ .entry = .{ .key = key, .value = value } };
         }
     };
 }
@@ -99,17 +113,14 @@ pub inline fn isDictEntry(comptime T: type) bool {
 ///   int: Number(u64),
 ///   object: ObjectPath,
 /// };
-///
 /// const IntOrObjectVariant = Variant(IntOrObject);
 ///
 /// const intOrObject: IntOrObjectVariant = .init(.{ .int = 16 });
-/// _ = intOrObject.int;
+/// _ = intOrObject.variant.int;
 /// ```
 pub fn Variant(comptime U: type) type {
     return struct {
         variant: U,
-
-        pub const Type = U;
 
         pub const __IS_ZBUS_VARIANT__ = true;
 
@@ -118,10 +129,11 @@ pub fn Variant(comptime U: type) type {
         }
     };
 }
-
 pub inline fn isVariant(comptime T: type) bool {
     return @hasField(T, "__IS_ZBUS_VARIANT__");
 }
+
+// TODO: move away interface things from this library
 
 /// Creates a Property representation of a D-Bus interface.
 pub fn Prop(comptime name: [:0]const u8, comptime V: type, comptime mode: enum { Read, Write, ReadWrite }) type {
@@ -130,7 +142,6 @@ pub fn Prop(comptime name: [:0]const u8, comptime V: type, comptime mode: enum {
 
         pub const NAME = name;
         pub const MODE = mode;
-        pub const Type = V;
 
         pub const __IS_ZBUS_PROP__ = true;
 
@@ -165,7 +176,6 @@ pub fn Method(comptime name: [:0]const u8, comptime Callback: type) type {
         callback: Callback,
 
         const NAME = name;
-        const Type = Callback;
 
         pub const __IS_ZBUS_METHOD__ = true;
 

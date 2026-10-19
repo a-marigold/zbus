@@ -64,7 +64,6 @@ pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: la
 
             for (value.array) |el| try serializeValue(writer, ElType, el, endian);
         } else if (types.isVariant(T)) {
-            // TODO: variant
             const info: lang.Type.Union = @typeInfo(T).@"union";
             const TagType = info.tag_type.?;
 
@@ -73,10 +72,8 @@ pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: la
             inline for (info.field_names, info.field_types) |fieldName, FieldType| {
                 const fieldTagValue = @field(TagType, fieldName);
                 if (fieldTagValue == tag) {
-                    try serializeSignature(
-                        writer,
-                        types.Signature{ .signature = signatureFromType(FieldType) },
-                    );
+                    try serializeSignature(writer, .init(signatureFromType(FieldType)));
+
                     try serializeValue(
                         writer,
                         FieldType,
@@ -195,6 +192,12 @@ pub const Header = struct {
     pub const Endian = enum(u8) {
         Little = 'l',
         Big = 'B',
+
+        /// It is recommended to be used for outcoming messages.
+        pub const NATIVE: @This() = switch (ENDIAN) {
+            .little => .Little,
+            .big => .Big,
+        };
     };
     pub const Types = struct {
         pub const METHOD_CALL = 1;
