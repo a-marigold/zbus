@@ -1,26 +1,33 @@
 //! D-Bus type wrappers used to be recognized
 //! by message serialization and parsing functions.
 //!
+//! Every type is semantically validated at comptime, except UTF-8 in strings.
+//!
 //! Implements every type in accordance with the specification:
 //!
 //! https://dbus.freedesktop.org/doc/dbus-specification.html#type-system
 
 const std = @import("std");
 const posix = std.posix;
+const lang = std.lang;
 
 /// `T` is `u8`, `u16`, `u32`, `u64`,
 /// `i16`, `i32`, `i64` or
 /// `f64`.
 pub fn Number(comptime T: type) type {
-    return struct {
-        number: T,
+    switch (T) {
+        else => @compileError("Invalid number type"),
 
-        pub const __IS_ZBUS_NUMBER__ = true;
+        u8, u16, u32, u64, i16, i32, i64, f64 => return struct {
+            number: T,
 
-        pub fn init(number: T) @This() {
-            return .{ .number = number };
-        }
-    };
+            pub const __IS_ZBUS_NUMBER__ = true;
+
+            pub fn init(number: T) @This() {
+                return .{ .number = number };
+            }
+        },
+    }
 }
 pub inline fn isNumber(comptime T: type) type {
     return @hasField(T, "__IS_ZBUS_NUMBER__");
@@ -54,7 +61,14 @@ pub const Signature = struct {
 };
 
 /// Returns a D-Bus struct, created from zig's struct `T`.
+///
+/// It is guaranteed that fields of the struct will
+/// be serialized in the order of their definition in code.
 pub fn Struct(comptime T: type) type {
+    const info: lang.Type.Struct = @typeInfo(T).@"struct";
+    inline for (info.field_types) |FieldType|
+        if (!isType(FieldType)) @compileError("Struct type must have only D-Bus types in fields");
+
     return struct {
         @"struct": T,
 
@@ -71,6 +85,8 @@ pub inline fn isStruct(comptime T: type) bool {
 
 /// Returns a D-Bus array with element type `E`.
 pub fn Array(comptime E: type) type {
+    if (!isType(E)) @compileError("Array elements must only be of a D-Bus type");
+
     return struct {
         array: []const E,
 
@@ -86,12 +102,17 @@ pub inline fn isArray(comptime T: type) bool {
 }
 
 /// Returns a D-Bus dict entry with key type `K` and value type `V`.
+///
+/// `K` must be `Number`, `Bool`, `UnixFd`, `String` `ObjectPath`
+/// or `Signature`, but not a container like `Struct`, `Array` or `Variant`.
+///
+/// Dict entry must only be array elements, and if
+/// a one isn't in an array, serialization fails at comptime.
 pub fn DictEntry(comptime K: type, comptime V: type) type {
-    const Entry = struct { key: K, value: V };
+    if (K) {}
 
     return struct {
-        entry: Entry,
-
+        entry: struct { key: K, value: V },
         pub const __IS_ZBUS_DICT_ENTRY__ = true;
 
         pub fn init(key: K, value: V) @This() {
@@ -107,6 +128,8 @@ pub inline fn isDictEntry(comptime T: type) bool {
 ///
 /// `T` is a union-type of the Variant.
 ///
+/// Unions without tags (bare unions) aren't allowed.
+///
 /// Example:
 /// ```zig
 /// const IntOrObject = union(enum) {
@@ -119,6 +142,13 @@ pub inline fn isDictEntry(comptime T: type) bool {
 /// _ = intOrObject.variant.int;
 /// ```
 pub fn Variant(comptime U: type) type {
+    const info: lang.Type.Union = @typeInfo(U).@"union";
+
+    if (info.tag_type == null) @compileError("Union of Variant must be tagged");
+
+    inline for (info.field_types) |FieldType|
+        if (!isType(FieldType)) @compileError("Union of Variant must have only D-bus types in fields");
+
     return struct {
         variant: U,
 
@@ -229,4 +259,14 @@ pub fn Interface(
 }
 pub inline fn isInterface(comptime T: type) bool {
     return @hasField(T, "__IS_ZBUS_INTERFACE__");
+}
+
+/// Returns `true` if `T` is a D-Bus type defined in this file.
+///
+/// Otherwise, returns `false`.
+fn isType(comptime T: type) bool {
+    return switch (T) {
+        Bool, UnixFd, String, ObjectPath, Signature => true,
+        else => if (isNumber(T) or isStruct(T) or isDictEntry(T) or isArray(T) or isVariant(T)) true else false,
+    };
 }
