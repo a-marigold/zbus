@@ -19,7 +19,7 @@ body: [*]const u8,
 /// Recursively (for containers) serializes `value` and writes the result to `writer`.
 ///
 /// Follows the passed `endian`, but in this library, it is better to use the native endian.
-pub fn serializeValue(writer: Io.Writer, comptime T: type, value: T, endian: lang.Endian) void {
+pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: lang.Endian) !void {
     switch (T) {
         types.Bool => try writer.writeByte(@intFromBool(value)),
         types.UnixFd => try writer.writeInt(posix.fd_t, value.fd, endian),
@@ -30,29 +30,86 @@ pub fn serializeValue(writer: Io.Writer, comptime T: type, value: T, endian: lan
             try writer.writeAll(slice);
         },
         else => if (types.isStruct(T)) {
-            const TInfo: lang.Type.Struct = @typeInfo(T).@"struct";
+            const info: lang.Type.Struct = @typeInfo(T).@"struct";
 
-            inline for (TInfo.field_names, TInfo.field_types) |name, Type|
-                serializeValue(Type, @field(value, name), writer);
+            inline for (info.field_names, info.field_types) |fieldName, FieldType|
+                try serializeValue(
+                    writer,
+                    FieldType,
+                    @field(value, fieldName),
+                    endian,
+                );
         } else if (types.isDictEntry(T)) {
-            serializeValue(
+            try serializeValue(
+                writer,
                 @FieldType(T, "key"),
                 @field(value, "key"),
-                writer,
+                endian,
             );
-            serializeValue(
+            try serializeValue(
+                writer,
                 @FieldType(T, "value"),
                 @field(value, "value"),
-                writer,
+                endian,
             );
         } else if (types.isArray(T)) {
             const ElType = @typeInfo(T).pointer.child;
 
-            for (value.array) |el| serializeValue(ElType, el, writer);
+            for (value.array) |el| try serializeValue(writer, ElType, el, endian);
         } else if (types.isVariant(T)) {
             // TODO: variant
         },
     }
+}
+
+/// Returns a comptime string of signature corresponding to `T`.
+///
+/// If `T` is bad, a compile error is shown.
+pub fn signatureFromType(comptime T: type) [:0]const u8 {
+    comptime switch (T) {
+        types.Bool => return "b",
+        types.UnixFd => return "h",
+        types.String => return "s",
+        types.ObjectPath => return "o",
+        types.Signature => return "g",
+        else => {
+            if (types.isNumber(T))
+                return switch (@FieldType(T, "number")) {
+                    u8 => "y",
+                    u16 => "q",
+                    u32 => "u",
+                    u64 => "t",
+                    i16 => "n",
+                    i32 => "i",
+                    i64 => "x",
+                    f64 => "d",
+                    else => @compileError("Unsupported number type"),
+                };
+            if (types.isStruct(T)) {
+                const info: lang.Type.Struct = @typeInfo(@FieldType(T, "struct")).@"struct";
+
+                var fieldsSignature: []const u8 = "";
+                for (info.field_types) |FieldType| {
+                    fieldsSignature += signatureFromType(FieldType);
+                }
+                return "(" ++ fieldsSignature ++ ")";
+            }
+            if (types.isDictEntry(T)) {
+                const keySignature = signatureFromType(@FieldType(T, "key"));
+                const valueSignature = signatureFromType(@FieldType(T, "value"));
+
+                return "{" ++ keySignature ++ valueSignature ++ "}";
+            }
+            if (types.isArray(T)) {
+                const info: lang.Type.Pointer = @typeInfo(@FieldType(T, "array")).pointer;
+
+                return "a" ++ signatureFromType(info.child);
+            }
+            if (types.isVariant(T)) return "v";
+
+            @compileError("Unknown type");
+        },
+    };
 }
 
 pub const Header = struct {
