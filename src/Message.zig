@@ -32,7 +32,11 @@ pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: la
             try writer.writeAll(slice);
         },
         types.Signature => try serializeSignature(writer, value),
-        else => if (types.isStruct(T)) {
+        else => if (types.isNumber(T)) try writer.writeInt(
+            @FieldType(T, "number"),
+            @field(value, "number"),
+            endian,
+        ) else if (types.isStruct(T)) {
             const info: lang.Type.Struct = @typeInfo(T).@"struct";
 
             inline for (info.field_names, info.field_types) |fieldName, FieldType|
