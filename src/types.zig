@@ -15,19 +15,19 @@ const lang = std.lang;
 /// `i16`, `i32`, `i64` or
 /// `f64`.
 pub fn Number(comptime T: type) type {
-    switch (T) {
-        else => @compileError("Invalid number type"),
+    if (T == u8 or T == u16 or T == u32 or T == u64 or
+        T == i16 or T == i32 or T == i64 or
+        T == f64) @compileError("Invalid number type");
 
-        u8, u16, u32, u64, i16, i32, i64, f64 => return struct {
-            number: T,
+    return struct {
+        number: T,
 
-            pub const __IS_ZBUS_NUMBER__ = true;
+        pub const __IS_ZBUS_NUMBER__ = true;
 
-            pub fn init(number: T) @This() {
-                return .{ .number = number };
-            }
-        },
-    }
+        pub fn init(number: T) @This() {
+            return .{ .number = number };
+        }
+    };
 }
 pub inline fn isNumber(comptime T: type) type {
     return @hasField(T, "__IS_ZBUS_NUMBER__");
@@ -161,6 +161,59 @@ pub fn Variant(comptime U: type) type {
 }
 pub inline fn isVariant(comptime T: type) bool {
     return @hasField(T, "__IS_ZBUS_VARIANT__");
+}
+
+/// Not an official D-Bus type. Under the hood, it maps to valid D-Bus types.
+///
+/// `T` is a struct with `VariantArrayEntry` in fields.
+///
+/// Why is it used:
+///
+/// In D-Bus, Arrays containing Structs with some keys and Variants (`a{sv}` or `a(sv)`) appear quite often.
+/// But almost all (if not all) of them have a strict,
+/// predefined amount of possible keys and types of values.
+///
+/// Keys and types of their values are known at comptime,
+/// so parsing messages doesn't require dynamic allocation for such arrays.
+///
+/// Examples:
+/// - `Message.Header` is an array of structs,
+///   where bytes are keys and variants are values.
+///   But as you know, there are only 9 standardized, predefined possible fields.
+/// - `org.freedesktop.impl.portal.FileChooser`, `OpenFile` method,
+///   has several input arguments that match the mentioned Arrays:
+///   Structs of them have Strings as keys and Variants of values,
+///   and possible keys are predefined by the specification.
+pub fn VariantArray(comptime T: type) type {
+    return struct {
+        @"struct": T,
+
+        pub const __IS_ZBUS_STATIC_VARIANT_ARRAY__ = true;
+
+        pub fn init(@"struct": T) @This() {
+            return .{ .@"struct" = @"struct" };
+        }
+    };
+}
+pub inline fn isStaticVariantArray(comptime T: type) type {
+    return @hasField(T, "__IS_ZBUS_STATIC_VARIANT_ARRAY__");
+}
+/// `key` is a comptime-known value of any D-Bus type.
+pub fn VariantArrayEntry(key: anytype, comptime V: type) type {
+    return struct {
+        value: V,
+
+        pub const KEY = key;
+
+        pub const __IS_ZBUS_STATIC_VARIANT_ARRAY_ENTRY__ = true;
+
+        pub fn init(value: V) @This() {
+            return .{ .value = value };
+        }
+    };
+}
+pub inline fn isStaticVariantArrayEntry(comptime T: type) type {
+    return @hasField(T, "__IS_ZBUS_STATIC_VARIANT_ARRAY_ENTRY__");
 }
 
 // TODO: move away interface things from this library
