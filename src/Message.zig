@@ -123,6 +123,29 @@ pub const Header = struct {
     };
 };
 
+/// Serializes the message into raw bytes as per
+/// the specification and writes the result to `writer`.
+///
+/// UTF-8 in strings isn't validated.
+pub fn serialize(self: *@This(), writer: *Io.Writer) !void {
+    const header = self.header;
+
+    const langEndian: lang.Endian = switch (header.endian) {
+        .Little => .little,
+        .Bin => .big,
+    };
+
+    inline for (.{ @intFromEnum(header.endian), header.type, header.flags, header.version }) |byte|
+        try writer.writeByte(byte);
+
+    inline for (.{ header.serial, header.bodyLen }) |int|
+        try writer.writeInt(@TypeOf(int), int, langEndian);
+
+    try serializeValue(writer, Header.Fields, header.fields);
+
+    try writer.writeAll(self.body);
+}
+
 /// Recursively (for containers) serializes `value` and writes the result to `writer`.
 ///
 /// UTF-8 in strings isn't validated.
