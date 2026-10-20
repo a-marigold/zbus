@@ -1,3 +1,5 @@
+// TODO: there is too much static dispatching
+
 const std = @import("std");
 const Io = std.Io;
 const posix = std.posix;
@@ -9,16 +11,121 @@ const ENDIAN = builtin.target.cpu.arch.endian();
 
 header: Header,
 
-// TODO: may be it shouldn't be raw
 /// Raw bytes of the body.
 ///
-/// The length can be found in `Header.bodyLen`,
-/// and the signature in `Header.Fields.bodySignature`.
-body: [*]const u8,
+/// Length of this slice matches `header.bodyLen`.
+///
+/// The signature can be found in `Header.Fields.bodySignature`.
+body: []const u8,
+
+pub const VERSION = 1;
+
+pub const Header = struct {
+    /// Endianness of bytes in the header and the body.
+    ///
+    /// For outcoming messages, it is recommended to use
+    /// the default field value, which is the native endian.
+    ///
+    /// Endianness affects only on:
+    /// - Numbers
+    /// - Lengths of strings
+    /// - Sizes of arrays
+    endian: Endian,
+
+    /// One of `Header.Types` values, or an unknown value.
+    ///
+    /// Incoming messages, which types are unknown, should be ignored.
+    type: u8,
+
+    /// `0` means no flag is selected.
+    ///
+    /// See `Header.Flags`.
+    flags: u8,
+
+    /// The major protocol version.
+    ///
+    /// Must always be `VERSION` constant found in this file.
+    version: u8,
+
+    bodyLen: u32,
+
+    /// Serial number of the message.
+    serial: u32,
+
+    fields: Fields,
+
+    /// Despite that header fields in the spec are in
+    /// array of variants, here it's a kind of struct for performance.
+    ///
+    /// Fields are nullable 'cause required fields depend on the message type.
+    pub const Fields = types.StaticVariantArray(struct {
+        path: types.StaticVariantArrayEntry(
+            types.Number(u32).init(1),
+            ?types.ObjectPath,
+        ),
+        interface: types.StaticVariantArrayEntry(
+            types.Number(u32).init(2),
+            ?types.String,
+        ),
+        method: types.StaticVariantArrayEntry(
+            types.Number(u32).init(3),
+            ?types.String,
+        ),
+        errorName: types.StaticVariantArrayEntry(
+            types.Number(u32).init(4),
+            ?types.String,
+        ),
+
+        /// Serial number of the message this message is a reply to.
+        replySerial: types.StaticVariantArrayEntry(
+            types.Number(u32).init(5),
+            ?types.Number(u32),
+        ),
+
+        destination: types.StaticVariantArrayEntry(
+            types.Number(u32).init(6),
+            ?types.String,
+        ),
+        sender: types.StaticVariantArrayEntry(
+            types.Number(u32).init(7),
+            ?types.String,
+        ),
+        bodySignature: types.StaticVariantArrayEntry(
+            types.Number(u32).init(8),
+            ?types.Signature,
+        ),
+        unixFds: types.StaticVariantArrayEntry(
+            types.Number(u32).init(9),
+            ?types.Signature,
+        ),
+    });
+
+    pub const Endian = enum(u8) {
+        Little = 'l',
+        Big = 'B',
+
+        /// It is recommended to be used for outcoming messages.
+        pub const NATIVE: @This() = switch (ENDIAN) {
+            .little => .Little,
+            .big => .Big,
+        };
+    };
+    pub const Types = struct {
+        pub const METHOD_CALL = 1;
+        pub const METHOD_RETURN = 2;
+        pub const ERROR = 3;
+        pub const SIGNAL = 4;
+    };
+    pub const Flags = struct {
+        pub const NO_REPLY_EXPECTED = 0x1;
+        pub const NO_AUTO_START = 0x2;
+        pub const ALLOW_INTERACTIVE_AUTH = 0x4;
+    };
+};
 
 /// Recursively (for containers) serializes `value` and writes the result to `writer`.
 ///
-/// UTF-8 in strings is not validated.
+/// UTF-8 in strings isn't validated.
 ///
 /// Follows the passed `endian`, but in this library, it is better to use the native endian.
 pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: lang.Endian) !void {
@@ -111,7 +218,7 @@ pub fn signatureFromType(comptime T: type) [:0]const u8 {
                     i32 => "i",
                     i64 => "x",
                     f64 => "d",
-                    else => @compileError("Unsupported number type"),
+                    else => @compileError("Invalid number type"),
                 };
             if (types.isStruct(T)) {
                 const info: lang.Type.Struct = @typeInfo(@FieldType(T, "struct")).@"struct";
@@ -139,75 +246,3 @@ pub fn signatureFromType(comptime T: type) [:0]const u8 {
         },
     };
 }
-
-pub const Header = struct {
-    /// Endianness of bytes in the header and the body.
-    ///
-    /// For outcoming messages, it is recommended to use
-    /// the default field value, which is the native endian.
-    ///
-    /// Endianness affects only on:
-    /// - Numbers
-    /// - Lengths of strings
-    /// - Sizes of arrays
-    endian: Endian,
-
-    /// One of `Header.Types` values, or an unknown value.
-    ///
-    /// Incoming messages, which types are unknown, should be ignored.
-    type: u8,
-
-    /// See `Header.Flags`.
-    flags: u8,
-
-    /// The protocol version.
-    version: u8,
-
-    bodyLen: u32,
-
-    /// Serial number of the message.
-    serial: u32,
-
-    fields: Fields,
-
-    /// Despite that header fields in the spec
-    /// are in array of variants, here it's a struct for performance.
-    ///
-    /// Fields are nullable 'cause required fields depend on the message type.
-    pub const Fields = struct {
-        path: ?types.ObjectPath,
-        interface: ?types.String,
-        method: ?types.String,
-        errorName: ?types.String,
-
-        /// Serial number of the message this message is a reply to.
-        replySerial: ?types.Number(u32),
-
-        destination: ?types.String,
-        sender: ?types.String,
-        bodySignature: ?types.Signature,
-        unixFds: ?types.Number(u32),
-    };
-
-    pub const Endian = enum(u8) {
-        Little = 'l',
-        Big = 'B',
-
-        /// It is recommended to be used for outcoming messages.
-        pub const NATIVE: @This() = switch (ENDIAN) {
-            .little => .Little,
-            .big => .Big,
-        };
-    };
-    pub const Types = struct {
-        pub const METHOD_CALL = 1;
-        pub const METHOD_RETURN = 2;
-        pub const ERROR = 3;
-        pub const SIGNAL = 4;
-    };
-    pub const Flags = struct {
-        pub const NO_REPLY_EXPECTED = 0x1;
-        pub const NO_AUTO_START = 0x2;
-        pub const ALLOW_INTERACTIVE_AUTH = 0x4;
-    };
-};
