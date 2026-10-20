@@ -9,16 +9,43 @@ const types = @import("types.zig");
 
 const ENDIAN = builtin.target.cpu.arch.endian();
 
-header: Header,
-
-/// Raw bytes of the body.
-///
-/// Length of this slice matches `header.bodyLen`.
-///
-/// The signature can be found in `Header.Fields.bodySignature`.
-body: []const u8,
-
 pub const VERSION = 1;
+
+pub fn Message(comptime Body: type) type {
+    return struct {
+        header: Header,
+
+        /// Raw bytes of the body.
+        ///
+        /// Length of this slice matches `header.bodyLen`.
+        ///
+        /// The signature can be found in `Header.Fields.bodySignature`.
+        body: Body,
+
+        /// Serializes the message into raw bytes as per
+        /// the specification and writes the result to `writer`.
+        ///
+        /// UTF-8 in strings isn't validated.
+        pub fn serialize(self: *@This(), writer: *Io.Writer) !void {
+            const header = self.header;
+
+            const langEndian: lang.Endian = switch (header.endian) {
+                .Little => .little,
+                .Bin => .big,
+            };
+
+            inline for (.{ @intFromEnum(header.endian), header.type, header.flags, header.version }) |byte|
+                try writer.writeByte(byte);
+
+            inline for (.{ header.serial, header.bodyLen }) |int|
+                try writer.writeInt(@TypeOf(int), int, langEndian);
+
+            try serializeValue(writer, Header.Fields, header.fields);
+
+            try serializeValue(writer, Body, self.body);
+        }
+    };
+}
 
 pub const Header = struct {
     /// Endianness of bytes in the header and the body.
@@ -34,7 +61,7 @@ pub const Header = struct {
 
     /// One of `Header.Types` values, or an unknown value.
     ///
-    /// Incoming messages, which types are unknown, should be ignored.
+    /// Incoming messages, types of which are unknown, should be ignored.
     type: u8,
 
     /// `0` means no flag is selected.
@@ -122,29 +149,6 @@ pub const Header = struct {
         pub const ALLOW_INTERACTIVE_AUTH = 0x4;
     };
 };
-
-/// Serializes the message into raw bytes as per
-/// the specification and writes the result to `writer`.
-///
-/// UTF-8 in strings isn't validated.
-pub fn serialize(self: *@This(), writer: *Io.Writer) !void {
-    const header = self.header;
-
-    const langEndian: lang.Endian = switch (header.endian) {
-        .Little => .little,
-        .Bin => .big,
-    };
-
-    inline for (.{ @intFromEnum(header.endian), header.type, header.flags, header.version }) |byte|
-        try writer.writeByte(byte);
-
-    inline for (.{ header.serial, header.bodyLen }) |int|
-        try writer.writeInt(@TypeOf(int), int, langEndian);
-
-    try serializeValue(writer, Header.Fields, header.fields);
-
-    try writer.writeAll(self.body);
-}
 
 /// Recursively (for containers) serializes `value` and writes the result to `writer`.
 ///
