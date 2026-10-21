@@ -1,4 +1,4 @@
-// TODO: there is too much static dispatching
+// TODO: there is too much static dispatching. Review all the generic functions carefully
 
 const std = @import("std");
 const Io = std.Io;
@@ -9,6 +9,10 @@ const types = @import("types.zig");
 
 const ENDIAN = builtin.target.cpu.arch.endian();
 
+/// The current D-Bus protocol version.
+///
+/// All incoming and outcoming message
+/// must have only this version in the header.
 pub const VERSION = 1;
 
 pub fn Message(comptime Body: type) type {
@@ -50,31 +54,26 @@ pub fn Message(comptime Body: type) type {
 pub const Header = struct {
     /// Endianness of bytes in the header and the body.
     ///
-    /// For outcoming messages, it is recommended to use
-    /// the default field value, which is the native endian.
+    /// For outcoming messages, it is recommended to use the native endian.
     ///
     /// Endianness affects only on:
     /// - Numbers
     /// - Lengths of strings
     /// - Sizes of arrays
-    endian: Endian,
+    endian: lang.Endian,
 
-    /// One of `Header.Types` values, or an unknown value.
-    ///
-    /// Incoming messages, types of which are unknown, should be ignored.
-    type: u8,
+    /// Type of the message.
+    type: Type,
 
     /// `0` means no flag is selected.
     ///
     /// See `Header.Flags`.
     flags: u8,
 
-    /// The major protocol version.
-    ///
-    /// Must always be `VERSION` constant found in this file.
+    /// The major D-Bus protocol version.
     version: u8,
 
-    bodyLen: u32,
+    bodySize: BodySize,
 
     /// Serial number of the message.
     serial: u32,
@@ -82,71 +81,49 @@ pub const Header = struct {
     fields: Fields,
 
     /// Despite that header fields in the spec are in
-    /// array of variants, here it's a kind of struct for performance.
+    /// array of variants, here it's a struct for performance.
     ///
-    /// Fields are nullable 'cause required fields depend on the message type.
-    pub const Fields = types.StaticVariantArray(struct {
-        path: types.StaticVariantArrayEntry(
-            types.Number(u32).init(1),
-            ?types.ObjectPath,
-        ),
-        interface: types.StaticVariantArrayEntry(
-            types.Number(u32).init(2),
-            ?types.String,
-        ),
-        method: types.StaticVariantArrayEntry(
-            types.Number(u32).init(3),
-            ?types.String,
-        ),
-        errorName: types.StaticVariantArrayEntry(
-            types.Number(u32).init(4),
-            ?types.String,
-        ),
+    /// Values are nullable 'cause required fields depend on the message type.
+    pub const Fields = struct {
+        objectPath: ?[:0]const u8,
+        interface: ?[:0]const u8,
+        method: ?[:0]const u8,
+        errorName: ?[:0]const u8,
 
         /// Serial number of the message this message is a reply to.
-        replySerial: types.StaticVariantArrayEntry(
-            types.Number(u32).init(5),
-            ?types.Number(u32),
-        ),
+        replySerial: ?u32,
 
-        destination: types.StaticVariantArrayEntry(
-            types.Number(u32).init(6),
-            ?types.String,
-        ),
-        sender: types.StaticVariantArrayEntry(
-            types.Number(u32).init(7),
-            ?types.String,
-        ),
-        bodySignature: types.StaticVariantArrayEntry(
-            types.Number(u32).init(8),
-            ?types.Signature,
-        ),
-        unixFds: types.StaticVariantArrayEntry(
-            types.Number(u32).init(9),
-            ?types.Signature,
-        ),
-    });
+        destination: ?[:0]const u8,
+        sender: ?[:0]const u8,
+        bodySignature: ?[:0]const u8,
+        unixFds: ?u32,
 
-    pub const Endian = enum(u8) {
-        Little = 'l',
-        Big = 'B',
+        pub const BodySignature = struct {
+            comptime isAuto: true = true,
+            signature: [:0]const u8,
 
-        /// It is recommended to be used for outcoming messages.
-        pub const NATIVE: @This() = switch (ENDIAN) {
-            .little => .Little,
-            .big => .Big,
+            /// Compute the signature during serialization.
+            pub const AUTO: @This() = .{ .isAuto = true, .signature = &.{} };
         };
     };
-    pub const Types = struct {
-        pub const METHOD_CALL = 1;
-        pub const METHOD_RETURN = 2;
-        pub const ERROR = 3;
-        pub const SIGNAL = 4;
+
+    pub const Type = enum(u8) {
+        MethodCall = 1,
+        MethodReturn = 2,
+        Error = 3,
+        Signal = 4,
     };
     pub const Flags = struct {
         pub const NO_REPLY_EXPECTED = 0x1;
         pub const NO_AUTO_START = 0x2;
         pub const ALLOW_INTERACTIVE_AUTH = 0x4;
+    };
+    pub const BodySize = struct {
+        comptime isAuto: true = true,
+        size: u32,
+
+        /// Compute the length during serialization
+        pub const AUTO = .{ .isAuto = true, .len = 0 };
     };
 };
 
