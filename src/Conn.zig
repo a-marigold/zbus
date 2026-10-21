@@ -9,9 +9,10 @@ const fmt = std.fmt;
 const posix = std.posix;
 const process = std.process;
 const utils = @import("utils.zig");
+const message = @import("message.zig");
+const Message = message.Message;
 
 const SYSTEM_BUS_PATH = "/var/run/dbus/system_bus_socket";
-
 const SYSTEM_BUS_ENV_NAME = "DBUS_SYSTEM_BUS_ADDRESS";
 const SESSION_BUS_ENV_NAME = "DBUS_SESSION_BUS_ADDRESS";
 
@@ -24,10 +25,12 @@ pub const InitError = error{
     BusPathTooLong,
     ConnectFail,
     AuthFail,
+    NegotiateUnixFdFail,
+    SendHelloFail,
 };
 /// Creates a socket, connects to the D-Bus broker by `busPath`,
 /// authentificates the connection and says Hello.
-pub fn init(io: Io, busPath: [:0]const u8, comptime options: Options) InitError!@This() {
+pub fn init(io: Io, busPath: []const u8, options: Options) InitError!@This() {
     const socket: net.UnixAddress = .init(busPath) catch return InitError.BusPathTooLong;
 
     const stream = socket.connect(io) catch return InitError.ConnectFail;
@@ -40,14 +43,14 @@ pub fn init(io: Io, busPath: [:0]const u8, comptime options: Options) InitError!
     const ioWriter = &writer.interface;
 
     // Credentials passing as per the protocol
-    ioWriter.writeByte(0);
-    ioWriter.flush();
+    ioWriter.writeByte(0) catch return InitError.AuthFail;
+    ioWriter.flush() catch return InitError.AuthFail;
 
     // `AUTH EXTERNAL` command
     const hexUidString = block: {
         const uid = utils.getUid();
 
-        const maxUidString = comptime fmt.comptimePrint("{d}", .{uid});
+        const maxUidString = comptime fmt.comptimePrint("{d}", .{math.maxInt(@TypeOf(uid))});
         const maxHexUidString = comptime fmt.comptimePrint("{X}", .{maxUidString});
 
         var buffer: [maxHexUidString.len]u8 = undefined;
@@ -57,17 +60,16 @@ pub fn init(io: Io, busPath: [:0]const u8, comptime options: Options) InitError!
         break :block mem.print(&buffer, "{X}", .{uidString}) catch unreachable;
     };
 
-    ioWriter.print("AUTH EXTERNAL {s}\r\n", .{hexUidString});
-    ioWriter.flush();
+    ioWriter.print("AUTH EXTERNAL {s}\r\n", .{hexUidString}) catch return InitError.AuthFail;
+    ioWriter.flush() catch return InitError.AuthFail;
 
     const authResponse = ioReader.takeDelimiterInclusive('\n') catch return InitError.AuthFail;
-
     if (!mem.startsWith(u8, authResponse, "OK")) return InitError.AuthFail;
 
     // `NEGOTIATE_UNIX_FD` command
-    if (comptime options.isNegotiateUnixFd) {
-        ioWriter.writeAll("NEGOTIATE_UNIX_FD\r\n");
-        ioWriter.flush();
+    if (options.isNegotiateUnixFd) {
+        ioWriter.writeAll("NEGOTIATE_UNIX_FD\r\n") catch return InitError.NegotiateUnixFdFail;
+        ioWriter.flush() catch return InitError.NegotiateUnixFdFail;
 
         const negotiateUnixFdResponse = ioReader.takeDelimiterInclusive('\n');
 
@@ -77,7 +79,30 @@ pub fn init(io: Io, busPath: [:0]const u8, comptime options: Options) InitError!
 
     // `BEGIN` command
     ioWriter.writeAll("BEGIN\r\n") catch return InitError.AuthFail;
-    ioWriter.flush();
+    ioWriter.flush() catch return InitError.AuthFail;
+
+    // Send hello message and the broker
+    // will assign an unique ID for this connection
+    const helloMessage: Message(null) = .{
+        .header = .{
+            .endian = .native,
+            .type = .MethodCall,
+            .flags = 0,
+            .version = message.VERSION,
+            .serial = 1,
+            .bodySize = .AUTO,
+            .fields = .{
+                .objectPath = "/org/freedesktop/DBus",
+                .interface = "org.freedesktop.DBus",
+                .method = "Hello",
+                .bodySignature = .AUTO,
+            },
+        },
+        .body = null,
+    };
+
+    helloMessage.serialize(ioWriter) catch return InitError.SendHelloFail;
+    ioWriter.flush() catch return InitError.SendHelloFail;
 
     return .{
         .stream = stream,
