@@ -15,16 +15,14 @@ const ENDIAN = builtin.target.cpu.arch.endian();
 /// must have only this version in the header.
 pub const VERSION = 1;
 
-pub fn Message(comptime Body: type) type {
+// TODO: invalid semantics of fields is not a parsing error (or actually is)
+
+/// If the message doesn't need a body, `Body` can be `null`.
+pub fn Message(comptime Body: ?type) type {
     return struct {
         header: Header,
 
-        /// Raw bytes of the body.
-        ///
-        /// Length of this slice matches `header.bodyLen`.
-        ///
-        /// The signature can be found in `Header.Fields.bodySignature`.
-        body: Body,
+        body: if (Body) |Type| Type else @TypeOf(null),
 
         /// Serializes the message into raw bytes as per
         /// the specification and writes the result to `writer`.
@@ -33,20 +31,22 @@ pub fn Message(comptime Body: type) type {
         pub fn serialize(self: *@This(), writer: *Io.Writer) !void {
             const header = self.header;
 
-            const langEndian: lang.Endian = switch (header.endian) {
-                .Little => .little,
-                .Bin => .big,
-            };
+            const endian = header.endian;
 
-            inline for (.{ @intFromEnum(header.endian), header.type, header.flags, header.version }) |byte|
+            const dbusEndian: u8 = switch (header.endian) {
+                .little => 'l',
+                .big => 'B',
+            };
+            inline for (.{ dbusEndian, header.type, header.flags, header.version }) |byte|
                 try writer.writeByte(byte);
 
-            inline for (.{ header.serial, header.bodyLen }) |int|
-                try writer.writeInt(@TypeOf(int), int, langEndian);
+            inline for (.{ header.serial, header.bodySize }) |int|
+                try writer.writeInt(@TypeOf(int), int, endian);
 
             try serializeValue(writer, Header.Fields, header.fields);
 
-            try serializeValue(writer, Body, self.body);
+            if (Body) |Type|
+                try serializeValue(writer, Type, self.body);
         }
     };
 }
@@ -123,7 +123,7 @@ pub const Header = struct {
         size: u32,
 
         /// Compute the length during serialization
-        pub const AUTO = .{ .isAuto = true, .len = 0 };
+        pub const AUTO = .{ .isAuto = true, .size = 0 };
     };
 };
 
