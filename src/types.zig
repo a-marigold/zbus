@@ -35,11 +35,13 @@ pub inline fn isNumber(comptime T: type) type {
 
 pub const Bool = bool;
 
+/// Not a file descriptor itself, but an index
+/// of the UNIX socket message ancillary array with file descriptors.
 pub const UnixFd = struct {
-    fd: posix.fd_t,
+    index: u32,
 
-    pub fn init(fd: posix.fd_t) @This() {
-        return .{ .fd = fd };
+    pub fn init(index: u32) @This() {
+        return .{ .index = index };
     }
 };
 
