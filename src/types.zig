@@ -141,7 +141,7 @@ pub inline fn isDictEntry(comptime T: type) bool {
 /// const IntOrObjectVariant = Variant(IntOrObject);
 ///
 /// const intOrObject: IntOrObjectVariant = .init(.{ .int = 16 });
-/// _ = intOrObject.variant.int;
+/// doSomething(intOrObject.variant.int);
 /// ```
 pub fn Variant(comptime U: type) type {
     const info: lang.Type.Union = @typeInfo(U).@"union";
@@ -164,6 +164,8 @@ pub fn Variant(comptime U: type) type {
 pub inline fn isVariant(comptime T: type) bool {
     return @hasField(T, "__IS_ZBUS_VARIANT__");
 }
+
+// TODO: `VariantArray` may be not only for variants
 
 /// Not an official D-Bus type. Under the hood, it maps to valid D-Bus types.
 ///
@@ -197,7 +199,7 @@ pub fn VariantArray(comptime T: type) type {
         }
     };
 }
-pub inline fn isStaticVariantArray(comptime T: type) type {
+pub inline fn isVariantArray(comptime T: type) type {
     return @hasField(T, "__IS_ZBUS_STATIC_VARIANT_ARRAY__");
 }
 /// `key` is a comptime-known value of any D-Bus type.
@@ -214,106 +216,8 @@ pub fn VariantArrayEntry(key: anytype, comptime V: type) type {
         }
     };
 }
-pub inline fn isStaticVariantArrayEntry(comptime T: type) type {
+pub inline fn isVariantArrayEntry(comptime T: type) type {
     return @hasField(T, "__IS_ZBUS_STATIC_VARIANT_ARRAY_ENTRY__");
-}
-
-// TODO: move away interface things from this library
-
-/// Creates a Property representation of a D-Bus interface.
-pub fn Prop(comptime name: [:0]const u8, comptime V: type, comptime mode: enum { Read, Write, ReadWrite }) type {
-    return struct {
-        value: V,
-
-        pub const NAME = name;
-        pub const MODE = mode;
-
-        pub const __IS_ZBUS_PROP__ = true;
-
-        pub fn init(value: V) V {
-            return .{ .value = value };
-        }
-    };
-}
-pub inline fn isProp(comptime T: type) bool {
-    return @hasField(T, "__IS_ZBUS_PROP__");
-}
-
-/// Creates a Signal representation for a D-Bus interface.
-pub fn Signal(comptime name: [:0]const u8) type {
-    return struct {
-        pub const NAME = name;
-
-        pub const __IS_ZBUS_SIGNAL__ = true;
-
-        pub fn init() @This() {
-            return .{};
-        }
-    };
-}
-pub inline fn isSignal(comptime T: type) bool {
-    return @hasField(T, "__IS_ZBUS_SIGNAL__");
-}
-
-/// Creates a Method representation for a D-Bus interface.
-pub fn Method(comptime name: [:0]const u8, comptime Callback: type) type {
-    return struct {
-        callback: Callback,
-
-        const NAME = name;
-
-        pub const __IS_ZBUS_METHOD__ = true;
-
-        pub fn init(callback: Callback) @This() {
-            return .{ .callback = callback };
-        }
-    };
-}
-pub inline fn isMethod(comptime T: type) bool {
-    return @hasField(T, "__IS_ZBUS_METHOD__");
-}
-
-/// Output argument of an interface method.
-///
-/// Used to allow returning multiple values.
-///
-/// There is no `InArg` 'cause input arguments
-/// are just plain parameters of zig functions.
-pub const OutArg = struct {
-    name: [:0]const u8,
-    type: type,
-};
-
-/// D-Bus interface that can be exposed at some object path.
-///
-/// `propTypes`, `signalTypes`, `methodTypes` consist of
-/// `Prop`, `Signal`, `Method` types of this module respectivly.
-pub fn Interface(
-    comptime name: [:0]const u8,
-    propTypes: []const type,
-    signalTypes: []const type,
-    methodTypes: []const type,
-) type {
-    return struct {
-        props: @Tuple(propTypes),
-        signals: @Tuple(signalTypes),
-        methods: @Tuple(methodTypes),
-
-        pub const NAME = name;
-
-        pub const __IS_ZBUS_INTERFACE__ = true;
-
-        pub fn init(props: @Tuple(propTypes), signals: @Tuple(signalTypes), methods: @Tuple(methodTypes)) @This() {
-            return .{
-                .props = props,
-                .signals = signals,
-                .methods = methods,
-            };
-        }
-    };
-}
-pub inline fn isInterface(comptime T: type) bool {
-    return @hasField(T, "__IS_ZBUS_INTERFACE__");
 }
 
 /// Returns `true` if `T` is a D-Bus type defined in this file.
