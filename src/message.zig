@@ -4,8 +4,6 @@
 
 // TODO: consider `unsupported endian` error
 
-// TODO: depth of container types
-
 // TODO:
 // Store a fixed array containing slices of arrays in input and quantity of their elements
 // (expected amount of arrays in the whole message is known at compile time)
@@ -27,6 +25,11 @@ const types = @import("types.zig");
 /// All incoming and outcoming messages
 /// must have only this version in the header.
 pub const PROTOCOL_VERSION = 1;
+
+/// Value is taken from the spec.
+const MAX_ARRAY_DEPTH = 32;
+/// Value is taken from the spec.
+const MAX_STRUCT_DEPTH = 32;
 
 const ParseValueError = error{
     /// The input ended too early so the data is interrupted
@@ -214,7 +217,7 @@ fn parseValueInner(
                 return ParseValueError.VariantTypeMismatch;
             }
 
-            @compileError("Unknown type T");
+            @compileError("Unknown type `T`");
         },
     }
 }
@@ -291,7 +294,6 @@ pub fn Message(comptime messageType: Header.MessageType, comptime Body: ?type) t
         }
     };
 }
-
 pub const Header = struct {
     /// Endianness of bytes in the header and the body.
     ///
@@ -428,6 +430,7 @@ pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: la
             }
             if (types.isVariant(T)) {
                 const info: Type.Union = @typeInfo(@FieldType(T, "variant")).@"union";
+                const TagType = info.tag_type.?;
 
                 const tag = @backingInt(value);
 
@@ -447,7 +450,7 @@ pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: la
                 return;
             }
 
-            @compileError("Unknown type T");
+            @compileError("Unknown type `T`");
         },
     }
 }
@@ -462,8 +465,28 @@ pub fn validateSignature(comptime T: type, signature: []const u8) bool {
 
 /// Returns a comptime string of the signature corresponding to `T`.
 ///
-/// If `T` isn't a D-Bus type, a compile error is shown.
+/// A compile error is shown when:
+/// - `T` isn't a D-Bus type.
+/// - `T` has more than 32 nested arrays and/or 32 nested structs.
+/// - `DictEntry` is outside of `Array`.
 pub fn signatureFromType(comptime T: type) [:0]const u8 {
+    return signatureFromTypeInner(T, false, 0, 0);
+}
+
+fn signatureFromTypeInner(
+    comptime T: type,
+    /// Is the most previous parent type an array.
+    ///
+    /// Used to detect dict entries outside
+    /// arrays (it's an error in the spec).
+    isArray: bool,
+    /// Depth of parent arrays of the current `T`.
+    arrayDepth: u64,
+    /// Depth of parent structs of the current `T`.
+    ///
+    /// Dict entries are considered structs.
+    structDepth: u64,
+) [:0]const u8 {
     comptime switch (T) {
         types.Bool => return "b",
         types.UnixFd => return "h",
@@ -486,26 +509,64 @@ pub fn signatureFromType(comptime T: type) [:0]const u8 {
             if (types.isStruct(T)) {
                 const info: Type.Struct = @typeInfo(@FieldType(T, "struct")).@"struct";
 
+                const nextStructDepth = structDepth + 1;
+
+                if (nextStructDepth > MAX_STRUCT_DEPTH)
+                    @compileError("Reached max struct depth");
+
                 var fieldsSignature: []const u8 = "";
                 for (info.field_types) |FieldType| {
-                    fieldsSignature += signatureFromType(FieldType);
+                    fieldsSignature += signatureFromTypeInner(
+                        FieldType,
+                        false,
+                        arrayDepth,
+                        nextStructDepth,
+                    );
                 }
                 return "(" ++ fieldsSignature ++ ")";
             }
             if (types.isDictEntry(T)) {
-                const keySignature = signatureFromType(@FieldType(T, "key"));
-                const valueSignature = signatureFromType(@FieldType(T, "value"));
+                if (!isArray)
+                    @compileError("`DictEntry` outside of `Array` isn't allowed");
+
+                const nextStructDepth = structDepth + 1;
+
+                if (nextStructDepth > MAX_STRUCT_DEPTH)
+                    @compileError("Reached max struct depth");
+
+                const keySignature = signatureFromTypeInner(
+                    @FieldType(T, "key"),
+                    false,
+                    arrayDepth,
+                    nextStructDepth,
+                );
+                const valueSignature = signatureFromTypeInner(
+                    @FieldType(T, "value"),
+                    false,
+                    arrayDepth,
+                    nextStructDepth,
+                );
 
                 return "{" ++ keySignature ++ valueSignature ++ "}";
             }
             if (types.isArray(T)) {
                 const info: Type.Pointer = @typeInfo(@FieldType(T, "array")).pointer;
 
-                return "a" ++ signatureFromType(info.child);
+                const nextArrayDepth = arrayDepth + 1;
+
+                if (nextArrayDepth > MAX_ARRAY_DEPTH)
+                    @compileError("Reached max array depth");
+
+                return "a" ++ signatureFromTypeInner(
+                    info.child,
+                    true,
+                    nextArrayDepth,
+                    structDepth,
+                );
             }
             if (types.isVariant(T)) return "v";
 
-            @compileError("Unknown type T");
+            @compileError("Unknown type `T`");
         },
     };
 }
