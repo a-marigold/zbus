@@ -1,8 +1,15 @@
 // TODO: there is too much static dispatching. Review all the generic functions carefully
 
+// TODO: Alignment formula: (offset + (alignment - 1)) & ~(alignment - 1)
+
 // TODO: consider `unsupported endian` error
 
-// TODO: store a fixed array containing slices of arrays and preallocate and parse arrays in a single pass
+// TODO: depth of container types
+
+// TODO:
+// Store a fixed array containing slices of arrays in input and quantity of their elements
+// (expected amount of arrays in the whole message is known at compile time)
+// Preallocate and parse arrays in a single pass
 
 const std = @import("std");
 const mem = std.mem;
@@ -27,11 +34,14 @@ const ParseValueError = error{
 
     InvalidValue,
     InvalidStrLen,
+    VariantTypeMismatch,
 };
 /// Mustn't be called without calling `validateSignature` first.
 ///
 /// - UTF-8 in strings isn't validated.
 /// - Object paths' structure isn't validated.
+///
+/// If `T` isn't a D-Bus type, a compile error is shown.
 pub fn parseValue(input: []const u8, comptime T: type, endian: lang.Endian) ParseValueError!T {
     const parsedValue = try parseValueInner(input, T, endian);
     return parsedValue.value;
@@ -39,7 +49,8 @@ pub fn parseValue(input: []const u8, comptime T: type, endian: lang.Endian) Pars
 
 /// Returns a struct:
 /// - `value` is the parsed value,
-/// - `size` is the amount of `input` bytes that was read to parse the value.
+/// - `size` is the amount of `input` bytes that were read to parse the value.
+///   It's always less than or equal `input.len`.
 fn parseValueInner(
     input: []const u8,
     comptime T: type,
@@ -61,7 +72,7 @@ fn parseValueInner(
             return .{ .value = @"bool", .size = boolSize };
         },
         types.UnixFd => {
-            const FdType = @FieldType(types.UnixFd, "fd");
+            const FdType = @FieldType(T, "index");
             const fdSize = @sizeOf(FdType);
 
             if (input.len < fdSize) return ParseValueError.UnexpectedEnd;
@@ -87,14 +98,14 @@ fn parseValueInner(
         },
         types.Signature => {
             // Length of `Signature` is encoded in `u8`
-            const strLenSize = @sizeOf(u8);
+            const signatureLenSize = @sizeOf(u8);
             const nullTerminatorSize = 1;
 
-            const str = try parseStrLike(input, u8, endian);
+            const signature = try parseStrLike(input, u8, endian);
 
             return .{
-                .value = @ptrCast(str),
-                .size = strLenSize + str.len + nullTerminatorSize,
+                .value = @ptrCast(signature),
+                .size = signatureLenSize + signature.len + nullTerminatorSize,
             };
         },
         else => {
@@ -110,15 +121,111 @@ fn parseValueInner(
                     .size = @sizeOf(NumberType),
                 };
             }
-            @compileError("Unknown type `T`");
+            if (types.isStruct(T)) {
+                const StructType = @FieldType(T, "struct");
+                const info: Type.Struct = @typeInfo(StructType).@"struct";
+
+                var @"struct": StructType = undefined;
+
+                var remainingInput = input;
+                inline for (info.field_names, info.field_types) |fieldName, FieldType| {
+                    const parsedField = try parseValueInner(
+                        remainingInput,
+                        FieldType,
+                        endian,
+                    );
+
+                    @field(@"struct", fieldName) = parsedField.value;
+
+                    remainingInput = remainingInput[0..parsedField.size];
+                }
+
+                return .{
+                    .value = .{ .@"struct" = @"struct" },
+                    .size = @intFromPtr(remainingInput.ptr) - @intFromPtr(input.ptr),
+                };
+            }
+            if (types.isDictEntry(T)) {
+                const parsedKey = try parseValueInner(
+                    input,
+                    @FieldType(T, "key"),
+                    endian,
+                );
+                const parsedValue = try parseValueInner(
+                    input[parsedKey.size..],
+                    @FieldType(T, "value"),
+                    endian,
+                );
+
+                return .{
+                    .value = .{
+                        .key = parsedKey.value,
+                        .value = parsedValue.value,
+                    },
+                    .size = parsedKey.size + parsedValue.size,
+                };
+            }
+            if (types.isVariant(T)) {
+                const UnionType = @FieldType(T, "variant");
+                const info: Type.Union = @typeInfo(UnionType).@"union";
+
+                const fieldSignatures = block: {
+                    var signatures: [info.field_types.len][:0]const u8 = undefined;
+                    inline for (info.field_types, &signatures) |FieldType, signature|
+                        signature.* = signatureFromType(FieldType);
+
+                    break :block signatures;
+                };
+
+                // `Variant` is encoded as a signature
+                // of the variant value, followed by that value
+                const parsedSignature = try parseStrLike(
+                    input,
+                    u8,
+                    endian,
+                );
+
+                const remainingInput = input[parsedSignature.size..];
+
+                inline for (
+                    info.field_names,
+                    info.field_types,
+                    fieldSignatures,
+                ) |fieldName, FieldType, fieldSignature|
+                    if (mem.eql(u8, fieldName, fieldSignature)) {
+                        const parsedValue = try parseValueInner(
+                            remainingInput,
+                            FieldType,
+                            endian,
+                        );
+
+                        return .{
+                            .value = .{
+                                .variant = @unionInit(
+                                    UnionType,
+                                    fieldName,
+                                    parsedValue.value,
+                                ),
+                            },
+                            .size = parsedSignature.size + parsedValue.size,
+                        };
+                    };
+
+                return ParseValueError.VariantTypeMismatch;
+            }
+
+            @compileError("Unknown type T");
         },
     }
 }
 
+// TODO: `fn ParseResult(comptime T: type) type`
+// TODO: use `ParseResult` in `parseStrLike`
+
 /// `StrLenType` is the type of length integer of a string-like value.
 ///
-/// Lengths of `Str` and `ObjectPath` are `u32`,
-/// but length of `Signature` is `u8`.
+/// It's needed 'cause lengths of `Str` and `ObjectPath`
+/// are `u32`, but length of `Signature` is `u8`.
 inline fn parseStrLike(
     input: []const u8,
     comptime StrLenType: type,
@@ -320,7 +427,7 @@ pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: la
                 return;
             }
             if (types.isVariant(T)) {
-                const info: Type.Union = @typeInfo(T).@"union";
+                const info: Type.Union = @typeInfo(@FieldType(T, "variant")).@"union";
 
                 const tag = @backingInt(value);
 
@@ -340,7 +447,7 @@ pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: la
                 return;
             }
 
-            @compileError("Unknown type `T`");
+            @compileError("Unknown type T");
         },
     }
 }
@@ -355,7 +462,7 @@ pub fn validateSignature(comptime T: type, signature: []const u8) bool {
 
 /// Returns a comptime string of the signature corresponding to `T`.
 ///
-/// If `T` is bad, a compile error is shown.
+/// If `T` isn't a D-Bus type, a compile error is shown.
 pub fn signatureFromType(comptime T: type) [:0]const u8 {
     comptime switch (T) {
         types.Bool => return "b",
@@ -398,7 +505,7 @@ pub fn signatureFromType(comptime T: type) [:0]const u8 {
             }
             if (types.isVariant(T)) return "v";
 
-            @compileError("Unknown type `T`");
+            @compileError("Unknown type T");
         },
     };
 }
