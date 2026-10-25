@@ -112,16 +112,17 @@ fn parseValueInner(
             };
         },
         else => {
-            if (types.isNumber(T)) {
-                const NumberType = @FieldType(T, "number");
-                const number = mem.readInt(
-                    NumberType,
-                    input[0..@sizeOf(NumberType)],
+            if (types.isNum(T)) {
+                const NumType = @FieldType(T, "num");
+                const num = mem.readInt(
+                    NumType,
+                    input[0..@sizeOf(NumType)],
                     endian,
                 );
+
                 return .{
-                    .value = .{ .number = number },
-                    .size = @sizeOf(NumberType),
+                    .value = .{ .num = num },
+                    .size = @sizeOf(NumType),
                 };
             }
             if (types.isStruct(T)) {
@@ -388,9 +389,9 @@ pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: la
         },
         types.Signature => try serializeSignature(writer, value),
         else => {
-            if (types.isNumber(T)) return writer.writeInt(
-                @FieldType(T, "number"),
-                @field(value, "number"),
+            if (types.isNum(T)) return writer.writeInt(
+                @FieldType(T, "num"),
+                @field(value, "num"),
                 endian,
             );
 
@@ -494,8 +495,8 @@ fn signatureFromTypeInner(
         types.ObjectPath => return "o",
         types.Signature => return "g",
         else => {
-            if (types.isNumber(T))
-                return switch (@FieldType(T, "number")) {
+            if (types.isNum(T))
+                return switch (@FieldType(T, "num")) {
                     u8 => "y",
                     u16 => "q",
                     u32 => "u",

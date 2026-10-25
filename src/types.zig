@@ -14,23 +14,23 @@ const lang = std.lang;
 /// `T` is `u8`, `u16`, `u32`, `u64`,
 /// `i16`, `i32`, `i64` or
 /// `f64`.
-pub fn Number(comptime T: type) type {
+pub fn Num(comptime T: type) type {
     if (T == u8 or T == u16 or T == u32 or T == u64 or
         T == i16 or T == i32 or T == i64 or
         T == f64) @compileError("Invalid number type");
 
     return struct {
-        number: T,
+        num: T,
 
-        pub const __IS_ZBUS_NUMBER__ = true;
+        pub const __IS_ZBUS_NUM__ = true;
 
-        pub fn init(number: T) @This() {
-            return .{ .number = number };
+        pub fn init(num: T) @This() {
+            return .{ .num = num };
         }
     };
 }
-pub inline fn isNumber(comptime T: type) type {
-    return @hasField(T, "__IS_ZBUS_NUMBER__");
+pub inline fn isNum(comptime T: type) type {
+    return @hasField(T, "__IS_ZBUS_NUM__");
 }
 
 pub const Bool = bool;
@@ -105,16 +105,19 @@ pub inline fn isArray(comptime T: type) bool {
 
 /// Returns a D-Bus dict entry with key type `K` and value type `V`.
 ///
-/// `K` must be `Number`, `Bool`, `UnixFd`, `Str` `ObjectPath`
+/// `K` must be `Num`, `Bool`, `UnixFd`, `Str` `ObjectPath`
 /// or `Signature`, but not a container like `Struct`, `Array` or `Variant`.
 ///
 /// Dict entry must only be array elements, and if
 /// a one isn't in an array, serialization fails at comptime.
 pub fn DictEntry(comptime K: type, comptime V: type) type {
+    // TODO:
+
     if (K) {}
 
     return struct {
         entry: struct { key: K, value: V },
+
         pub const __IS_ZBUS_DICT_ENTRY__ = true;
 
         pub fn init(key: K, value: V) @This() {
@@ -134,14 +137,14 @@ pub inline fn isDictEntry(comptime T: type) bool {
 ///
 /// Example:
 /// ```zig
-/// const IntOrObject = union(enum) {
-///   int: Number(u64),
-///   object: ObjectPath,
+/// const IntOrStr = union(enum) {
+///   int: Num(u64),
+///   str: Str,
 /// };
-/// const IntOrObjectVariant = Variant(IntOrObject);
+/// const IntOrStrVariant = Variant(IntOrStr);
 ///
-/// const intOrObject: IntOrObjectVariant = .init(.{ .int = 16 });
-/// doSomething(intOrObject.variant.int);
+/// const intOrStr: IntOrStrVariant = .init(.{ .int = 16 });
+/// doSomething(IntOrStr.variant.int);
 /// ```
 pub fn Variant(comptime U: type) type {
     const info: lang.Type.Union = @typeInfo(U).@"union";
@@ -226,6 +229,6 @@ pub inline fn isVariantArrayEntry(comptime T: type) type {
 fn isType(comptime T: type) bool {
     return switch (T) {
         Bool, UnixFd, Str, ObjectPath, Signature => true,
-        else => if (isNumber(T) or isStruct(T) or isDictEntry(T) or isArray(T) or isVariant(T)) true else false,
+        else => if (isNum(T) or isStruct(T) or isDictEntry(T) or isArray(T) or isVariant(T)) true else false,
     };
 }
