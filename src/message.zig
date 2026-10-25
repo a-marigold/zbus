@@ -110,8 +110,7 @@ fn parseValueInner(
                     .size = @sizeOf(NumberType),
                 };
             }
-
-            @compileError("Unknown type");
+            @compileError("Unknown type `T`");
         },
     }
 }
@@ -279,56 +278,69 @@ pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: la
             try writer.writeAll(slice);
         },
         types.Signature => try serializeSignature(writer, value),
-        else => if (types.isNumber(T)) try writer.writeInt(
-            @FieldType(T, "number"),
-            @field(value, "number"),
-            endian,
-        ) else if (types.isStruct(T)) {
-            const info: Type.Struct = @typeInfo(T).@"struct";
-
-            inline for (info.field_names, info.field_types) |fieldName, FieldType|
-                try serializeValue(
-                    writer,
-                    FieldType,
-                    @field(value, fieldName),
-                    endian,
-                );
-        } else if (types.isDictEntry(T)) {
-            try serializeValue(
-                writer,
-                @FieldType(T, "key"),
-                @field(value, "key"),
+        else => {
+            if (types.isNumber(T)) return writer.writeInt(
+                @FieldType(T, "number"),
+                @field(value, "number"),
                 endian,
             );
 
-            try serializeValue(
-                writer,
-                @FieldType(T, "value"),
-                @field(value, "value"),
-                endian,
-            );
-        } else if (types.isArray(T)) {
-            const ElType = @typeInfo(T).pointer.child;
+            if (types.isStruct(T)) {
+                const info: Type.Struct = @typeInfo(T).@"struct";
 
-            for (value.array) |el| try serializeValue(writer, ElType, el, endian);
-        } else if (types.isVariant(T)) {
-            const info: Type.Union = @typeInfo(T).@"union";
-
-            const tag = @backingInt(value);
-
-            inline for (info.field_names, info.field_types) |fieldName, FieldType| {
-                const fieldTagValue = @field(TagType, fieldName);
-                if (fieldTagValue == tag) {
-                    try serializeSignature(writer, .init(signatureFromType(FieldType)));
-
+                inline for (info.field_names, info.field_types) |fieldName, FieldType|
                     try serializeValue(
                         writer,
                         FieldType,
                         @field(value, fieldName),
                         endian,
                     );
-                }
+                return;
             }
+
+            if (types.isDictEntry(T)) {
+                try serializeValue(
+                    writer,
+                    @FieldType(T, "key"),
+                    @field(value, "key"),
+                    endian,
+                );
+                try serializeValue(
+                    writer,
+                    @FieldType(T, "value"),
+                    @field(value, "value"),
+                    endian,
+                );
+                return;
+            }
+            if (types.isArray(T)) {
+                const ElType = @typeInfo(T).pointer.child;
+
+                for (value.array) |el| try serializeValue(writer, ElType, el, endian);
+                return;
+            }
+            if (types.isVariant(T)) {
+                const info: Type.Union = @typeInfo(T).@"union";
+
+                const tag = @backingInt(value);
+
+                inline for (info.field_names, info.field_types) |fieldName, FieldType| {
+                    const fieldTagValue = @field(TagType, fieldName);
+                    if (fieldTagValue == tag) {
+                        try serializeSignature(writer, .init(signatureFromType(FieldType)));
+
+                        try serializeValue(
+                            writer,
+                            FieldType,
+                            @field(value, fieldName),
+                            endian,
+                        );
+                    }
+                }
+                return;
+            }
+
+            @compileError("Unknown type `T`");
         },
     }
 }
@@ -386,7 +398,7 @@ pub fn signatureFromType(comptime T: type) [:0]const u8 {
             }
             if (types.isVariant(T)) return "v";
 
-            @compileError("Unknown type");
+            @compileError("Unknown type `T`");
         },
     };
 }
