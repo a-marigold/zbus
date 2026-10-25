@@ -26,7 +26,7 @@ const ParseValueError = error{
     UnexpectedEnd,
 
     InvalidValue,
-    InvalidStringLen,
+    InvalidStrLen,
 };
 /// Mustn't be called without calling `validateSignature` first.
 ///
@@ -73,28 +73,28 @@ fn parseValueInner(
                 .size = fdSize,
             };
         },
-        types.String, types.ObjectPath => {
-            // Length of `String` and `ObjectPath` is encoded in `u32`
-            const stringLenSize = @sizeOf(u32);
+        types.Str, types.ObjectPath => {
+            // Length of `Str` and `ObjectPath` is encoded in `u32`
+            const strLenSize = @sizeOf(u32);
             const nullTerminatorSize = 1;
 
-            const string = try parseStringLike(input, u32, endian);
+            const str = try parseStrLike(input, u32, endian);
 
             return .{
-                .value = @ptrCast(string),
-                .size = stringLenSize + string.len + nullTerminatorSize,
+                .value = @ptrCast(str),
+                .size = strLenSize + str.len + nullTerminatorSize,
             };
         },
         types.Signature => {
             // Length of `Signature` is encoded in `u8`
-            const stringLenSize = @sizeOf(u8);
+            const strLenSize = @sizeOf(u8);
             const nullTerminatorSize = 1;
 
-            const string = try parseStringLike(input, u8, endian);
+            const str = try parseStrLike(input, u8, endian);
 
             return .{
-                .value = @ptrCast(string),
-                .size = stringLenSize + string.len + nullTerminatorSize,
+                .value = @ptrCast(str),
+                .size = strLenSize + str.len + nullTerminatorSize,
             };
         },
         else => {
@@ -115,39 +115,39 @@ fn parseValueInner(
     }
 }
 
-/// `StringLenType` is the type of length integer of a string-like value.
+/// `StrLenType` is the type of length integer of a string-like value.
 ///
-/// Lengths of `String` and `ObjectPath` are `u32`,
+/// Lengths of `Str` and `ObjectPath` are `u32`,
 /// but length of `Signature` is `u8`.
-inline fn parseStringLike(
+inline fn parseStrLike(
     input: []const u8,
-    comptime StringLenType: type,
+    comptime StrLenType: type,
     endian: lang.Endian,
 ) ParseValueError![:0]const u8 {
-    const stringLenSize = @sizeOf(StringLenType);
+    const strLenSize = @sizeOf(StrLenType);
     const nullTerminatorLen = 1;
 
-    const minStringLen = stringLenSize + nullTerminatorLen;
-    if (input.len < minStringLen) return ParseValueError.UnexpectedEnd;
+    const minStrLen = strLenSize + nullTerminatorLen;
+    if (input.len < minStrLen) return ParseValueError.UnexpectedEnd;
 
-    const fullStringLen = mem.readInt(
-        StringLenType,
-        input[0..stringLenSize],
+    const fullStrLen = mem.readInt(
+        StrLenType,
+        input[0..strLenSize],
         endian,
     ) + nullTerminatorLen;
-    const stringStart = stringLenSize;
+    const strStart = strLenSize;
 
-    const remainingInput = input[stringStart..];
-    if (remainingInput.len < fullStringLen) return ParseValueError.UnexpectedEnd;
+    const remainingInput = input[strStart..];
+    if (remainingInput.len < fullStrLen) return ParseValueError.UnexpectedEnd;
 
-    const fullString = remainingInput[0..fullStringLen];
+    const fullStr = remainingInput[0..fullStrLen];
 
     // Check null terminator
-    if (fullString[fullString.len - 1] != 0) return ParseValueError.InvalidValue;
+    if (fullStr[fullStr.len - 1] != 0) return ParseValueError.InvalidValue;
 
-    const string = fullString[0 .. fullString.len - nullTerminatorLen];
+    const str = fullStr[0 .. fullStr.len - nullTerminatorLen];
 
-    return string;
+    return str;
 }
 
 /// If the message doesn't need a body, `Body` can be `null`.
@@ -222,14 +222,14 @@ pub const Header = struct {
     /// Codes of fields are taken from https://dbus.freedesktop.org/doc/dbus-specification.html#message-protocol-messages.
     pub const Fields = types.VariantArray(struct {
         objectPath: types.VariantArrayEntry(1, types.ObjectPath),
-        interface: types.VariantArrayEntry(2, types.String),
-        method: types.VariantArrayEntry(3, types.String),
-        errorName: types.VariantArrayEntry(4, types.String),
+        interface: types.VariantArrayEntry(2, types.Str),
+        method: types.VariantArrayEntry(3, types.Str),
+        errorName: types.VariantArrayEntry(4, types.Str),
 
         /// Serial number of the message this message is a reply to.
         replySerial: types.VariantArrayEntry(5, ?u32),
-        destination: types.VariantArrayEntry(6, types.String),
-        sender: types.VariantArrayEntry(7, types.String),
+        destination: types.VariantArrayEntry(6, types.Str),
+        sender: types.VariantArrayEntry(7, types.Str),
         bodySignature: types.VariantArrayEntry(8, BodySignature), // TODO
         unixFds: types.VariantArrayEntry(9, ?u32),
 
@@ -271,7 +271,7 @@ pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: la
     switch (T) {
         types.Bool => try writer.writeByte(@intFromBool(value)),
         types.UnixFd => try writer.writeInt(posix.fd_t, value.fd, endian),
-        types.String, types.ObjectPath => {
+        types.Str, types.ObjectPath => {
             const slice: [:0]const u8 = @ptrCast(value);
 
             try writer.writeInt(u32, @intCast(slice.len), endian);
@@ -360,7 +360,7 @@ pub fn signatureFromType(comptime T: type) [:0]const u8 {
     comptime switch (T) {
         types.Bool => return "b",
         types.UnixFd => return "h",
-        types.String => return "s",
+        types.Str => return "s",
         types.ObjectPath => return "o",
         types.Signature => return "g",
         else => {

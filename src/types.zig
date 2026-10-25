@@ -45,7 +45,7 @@ pub const UnixFd = struct {
     }
 };
 
-pub const String = [:0]const u8;
+pub const Str = [:0]const u8;
 
 pub const ObjectPath = struct {
     path: [:0]const u8,
@@ -105,7 +105,7 @@ pub inline fn isArray(comptime T: type) bool {
 
 /// Returns a D-Bus dict entry with key type `K` and value type `V`.
 ///
-/// `K` must be `Number`, `Bool`, `UnixFd`, `String` `ObjectPath`
+/// `K` must be `Number`, `Bool`, `UnixFd`, `Str` `ObjectPath`
 /// or `Signature`, but not a container like `Struct`, `Array` or `Variant`.
 ///
 /// Dict entry must only be array elements, and if
@@ -184,7 +184,7 @@ pub inline fn isVariant(comptime T: type) bool {
 ///   But as you know, there are only 9 standardized, predefined possible fields.
 /// - `org.freedesktop.impl.portal.FileChooser`, `OpenFile` method,
 ///   has several input arguments that match the mentioned Arrays:
-///   Structs of them have Strings as keys and Variants of values,
+///   Structs of them have `Str` as keys and `Variant` as values,
 ///   and possible keys are predefined by the specification.
 pub fn VariantArray(comptime T: type) type {
     return struct {
@@ -321,7 +321,7 @@ pub inline fn isInterface(comptime T: type) bool {
 /// Otherwise, returns `false`.
 fn isType(comptime T: type) bool {
     return switch (T) {
-        Bool, UnixFd, String, ObjectPath, Signature => true,
+        Bool, UnixFd, Str, ObjectPath, Signature => true,
         else => if (isNumber(T) or isStruct(T) or isDictEntry(T) or isArray(T) or isVariant(T)) true else false,
     };
 }
