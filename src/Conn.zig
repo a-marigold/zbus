@@ -3,13 +3,14 @@
 const std = @import("std");
 const Io = std.Io;
 const net = Io.net;
+const process = std.process;
 const mem = std.mem;
 const math = std.math;
 const fmt = std.fmt;
 const posix = std.posix;
-const process = std.process;
-const utils = @import("utils.zig");
+const linux = std.os.linux;
 const message = @import("message.zig");
+
 const Message = message.Message;
 
 const SYSTEM_BUS_PATH = "/var/run/dbus/system_bus_socket";
@@ -86,18 +87,14 @@ const AuthError = error{ AuthExternalFail, NegotiateUnixFdFail };
 /// is `true`, sets up file descriptors negotiation.
 ///
 /// `reader` and `writer` are the socket reader and writer.
-fn authentificate(
-    reader: *Io.Reader,
-    writer: *Io.Writer,
-    comptime isNegotiateUnixFd: bool,
-) AuthError!void {
+fn authentificate(reader: *Io.Reader, writer: *Io.Writer, comptime isNegotiateUnixFd: bool) AuthError!void {
     // Credentials passing as per the protocol
     writer.writeByte(0) catch return AuthError.AuthExternalFail;
     writer.flush() catch return AuthError.AuthExternalFail;
 
     // `AUTH EXTERNAL` command
     const hexUidString = block: {
-        const uid = utils.getUid();
+        const uid = getUid();
 
         const maxUidString = comptime fmt.comptimePrint("{d}", .{math.maxInt(@TypeOf(uid))});
         const maxHexUidString = comptime fmt.comptimePrint("{X}", .{maxUidString});
@@ -113,7 +110,8 @@ fn authentificate(
     writer.flush() catch return AuthError.AuthExternalFail;
 
     const authResponse = reader.takeDelimiterInclusive('\n') catch return AuthError.AuthExternalFail;
-    if (!mem.startsWith(u8, authResponse, "OK")) return AuthError.AuthExternalFail;
+    if (authResponse.len > 2 and
+        authResponse[0] == 'O' and authResponse[1] == 'K') return AuthError.AuthExternalFail;
 
     // `NEGOTIATE_UNIX_FD` command
     if (comptime isNegotiateUnixFd) {
@@ -123,7 +121,7 @@ fn authentificate(
         const negotiateUnixFdResponse =
             reader.takeDelimiterInclusive('\n') catch return AuthError.NegotiateUnixFdFail;
 
-        if (!mem.startsWith(u8, negotiateUnixFdResponse, "AGREE_UNIX_FD"))
+        if (!mem.eql(u8, negotiateUnixFdResponse, "AGREE_UNIX_FD\r\n"))
             return AuthError.AuthExternalFail;
     }
 
@@ -178,4 +176,8 @@ pub fn getBusPath(comptime busType: BusType, env: process.Environ) BusPathError!
         return path[abstractPathKey..];
 
     return BusPathError.InvalidPath;
+}
+
+inline fn getUid() u32 {
+    return linux.getuid();
 }
