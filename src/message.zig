@@ -1,30 +1,165 @@
 // TODO: there is too much static dispatching. Review all the generic functions carefully
 
+// TODO: consider `unsupported endian` error
+
+// TODO: store a fixed array containing slices of arrays and preallocate and parse arrays in a single pass
+
 const std = @import("std");
+const mem = std.mem;
 const Io = std.Io;
 const posix = std.posix;
 const lang = std.lang;
+const Type = lang.Type;
 const builtin = @import("builtin");
 const types = @import("types.zig");
 
-const ENDIAN = builtin.target.cpu.arch.endian();
+// TODO: more concrete error return types
 
 /// The current D-Bus protocol version.
 ///
-/// All incoming and outcoming message
+/// All incoming and outcoming messages
 /// must have only this version in the header.
-pub const VERSION = 1;
+pub const PROTOCOL_VERSION = 1;
 
-// TODO: invalid semantics of fields is not a parsing error (or actually is)
+const ParseValueError = error{
+    /// The input ended too early so the data is interrupted
+    UnexpectedEnd,
+
+    InvalidValue,
+    InvalidStringLen,
+};
+/// Mustn't be called without calling `validateSignature` first.
+///
+/// - UTF-8 in strings isn't validated.
+/// - Object paths' structure isn't validated.
+pub fn parseValue(input: []const u8, comptime T: type, endian: lang.Endian) ParseValueError!T {
+    const parsedValue = try parseValueInner(input, T, endian);
+    return parsedValue.value;
+}
+
+/// Returns a struct:
+/// - `value` is the parsed value,
+/// - `size` is the amount of `input` bytes that was read to parse the value.
+fn parseValueInner(
+    input: []const u8,
+    comptime T: type,
+    endian: lang.Endian,
+) ParseValueError!struct { value: T, size: usize } {
+    switch (T) {
+        types.Bool => {
+            // `Bool` is encoded in `u32`
+            const boolSize = @sizeOf(u32);
+
+            if (input.len < boolSize) return ParseValueError.UnexpectedEnd;
+
+            const @"bool" = switch (mem.readInt(u32, input[0..boolSize], endian)) {
+                0 => false,
+                1 => true,
+                else => return ParseValueError.InvalidValue,
+            };
+
+            return .{ .value = @"bool", .size = boolSize };
+        },
+        types.UnixFd => {
+            const FdType = @FieldType(types.UnixFd, "fd");
+            const fdSize = @sizeOf(FdType);
+
+            if (input.len < fdSize) return ParseValueError.UnexpectedEnd;
+
+            const fd = mem.readInt(FdType, input[0..fdSize], endian);
+
+            return .{
+                .value = .{ .fd = fd },
+                .size = fdSize,
+            };
+        },
+        types.String, types.ObjectPath => {
+            // Length of `String` and `ObjectPath` is encoded in `u32`
+            const stringLenSize = @sizeOf(u32);
+            const nullTerminatorSize = 1;
+
+            const string = try parseStringLike(input, u32, endian);
+
+            return .{
+                .value = @ptrCast(string),
+                .size = stringLenSize + string.len + nullTerminatorSize,
+            };
+        },
+        types.Signature => {
+            // Length of `Signature` is encoded in `u8`
+            const stringLenSize = @sizeOf(u8);
+            const nullTerminatorSize = 1;
+
+            const string = try parseStringLike(input, u8, endian);
+
+            return .{
+                .value = @ptrCast(string),
+                .size = stringLenSize + string.len + nullTerminatorSize,
+            };
+        },
+        else => {
+            if (types.isNumber(T)) {
+                const NumberType = @FieldType(T, "number");
+                const number = mem.readInt(
+                    NumberType,
+                    input[0..@sizeOf(NumberType)],
+                    endian,
+                );
+                return .{
+                    .value = .{ .number = number },
+                    .size = @sizeOf(NumberType),
+                };
+            }
+
+            @compileError("Unknown type");
+        },
+    }
+}
+
+/// `StringLenType` is the type of length integer of a string-like value.
+///
+/// Lengths of `String` and `ObjectPath` are `u32`,
+/// but length of `Signature` is `u8`.
+inline fn parseStringLike(
+    input: []const u8,
+    comptime StringLenType: type,
+    endian: lang.Endian,
+) ParseValueError![:0]const u8 {
+    const stringLenSize = @sizeOf(StringLenType);
+    const nullTerminatorLen = 1;
+
+    const minStringLen = stringLenSize + nullTerminatorLen;
+    if (input.len < minStringLen) return ParseValueError.UnexpectedEnd;
+
+    const fullStringLen = mem.readInt(
+        StringLenType,
+        input[0..stringLenSize],
+        endian,
+    ) + nullTerminatorLen;
+    const stringStart = stringLenSize;
+
+    const remainingInput = input[stringStart..];
+    if (remainingInput.len < fullStringLen) return ParseValueError.UnexpectedEnd;
+
+    const fullString = remainingInput[0..fullStringLen];
+
+    // Check null terminator
+    if (fullString[fullString.len - 1] != 0) return ParseValueError.InvalidValue;
+
+    const string = fullString[0 .. fullString.len - nullTerminatorLen];
+
+    return string;
+}
 
 /// If the message doesn't need a body, `Body` can be `null`.
-pub fn Message(comptime Body: ?type) type {
+pub fn Message(comptime messageType: Header.MessageType, comptime Body: ?type) type {
     return struct {
         header: Header,
+        body: if (Body) |BodyType| BodyType else @TypeOf(null),
 
-        body: if (Body) |Type| Type else @TypeOf(null),
+        pub const TYPE = messageType;
 
-        /// Serializes the message into raw bytes as per
+        /// Serializes the message into bytes as per
         /// the specification and writes the result to `writer`.
         ///
         /// UTF-8 in strings isn't validated.
@@ -37,7 +172,7 @@ pub fn Message(comptime Body: ?type) type {
                 .little => 'l',
                 .big => 'B',
             };
-            inline for (.{ dbusEndian, header.type, header.flags, header.version }) |byte|
+            inline for (.{ dbusEndian, header.messageType, header.flags, header.version }) |byte|
                 try writer.writeByte(byte);
 
             inline for (.{ header.serial, header.bodySize }) |int|
@@ -45,8 +180,8 @@ pub fn Message(comptime Body: ?type) type {
 
             try serializeValue(writer, Header.Fields, header.fields);
 
-            if (Body) |Type|
-                try serializeValue(writer, Type, self.body);
+            if (Body) |BodyType|
+                try serializeValue(writer, BodyType, self.body);
         }
     };
 }
@@ -63,7 +198,7 @@ pub const Header = struct {
     endian: lang.Endian,
 
     /// Type of the message.
-    type: Type,
+    messageType: MessageType,
 
     /// `0` means no flag is selected.
     ///
@@ -71,7 +206,7 @@ pub const Header = struct {
     flags: u8,
 
     /// The major D-Bus protocol version.
-    version: u8,
+    version: u8, // TODO: rename to `protocolVersion`
 
     bodySize: BodySize,
 
@@ -84,19 +219,20 @@ pub const Header = struct {
     /// array of variants, here it's a struct for performance.
     ///
     /// Values are nullable 'cause required fields depend on the message type.
-    pub const Fields = struct {
-        objectPath: ?[:0]const u8,
-        interface: ?[:0]const u8,
-        method: ?[:0]const u8,
-        errorName: ?[:0]const u8,
+    ///
+    /// Codes of fields are taken from https://dbus.freedesktop.org/doc/dbus-specification.html#message-protocol-messages.
+    pub const Fields = types.VariantArray(struct {
+        objectPath: types.VariantArrayEntry(1, types.ObjectPath),
+        interface: types.VariantArrayEntry(2, types.String),
+        method: types.VariantArrayEntry(3, types.String),
+        errorName: types.VariantArrayEntry(4, types.String),
 
         /// Serial number of the message this message is a reply to.
-        replySerial: ?u32,
-
-        destination: ?[:0]const u8,
-        sender: ?[:0]const u8,
-        bodySignature: ?[:0]const u8,
-        unixFds: ?u32,
+        replySerial: types.VariantArrayEntry(5, ?u32),
+        destination: types.VariantArrayEntry(6, types.String),
+        sender: types.VariantArrayEntry(7, types.String),
+        bodySignature: types.VariantArrayEntry(8, BodySignature), // TODO
+        unixFds: types.VariantArrayEntry(9, ?u32),
 
         pub const BodySignature = struct {
             comptime isAuto: true = true,
@@ -105,9 +241,9 @@ pub const Header = struct {
             /// Compute the signature during serialization.
             pub const AUTO: @This() = .{ .isAuto = true, .signature = &.{} };
         };
-    };
+    });
 
-    pub const Type = enum(u8) {
+    pub const MessageType = enum(u8) {
         MethodCall = 1,
         MethodReturn = 2,
         Error = 3,
@@ -148,7 +284,7 @@ pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: la
             @field(value, "number"),
             endian,
         ) else if (types.isStruct(T)) {
-            const info: lang.Type.Struct = @typeInfo(T).@"struct";
+            const info: Type.Struct = @typeInfo(T).@"struct";
 
             inline for (info.field_names, info.field_types) |fieldName, FieldType|
                 try serializeValue(
@@ -164,6 +300,7 @@ pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: la
                 @field(value, "key"),
                 endian,
             );
+
             try serializeValue(
                 writer,
                 @FieldType(T, "value"),
@@ -175,10 +312,9 @@ pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: la
 
             for (value.array) |el| try serializeValue(writer, ElType, el, endian);
         } else if (types.isVariant(T)) {
-            const info: lang.Type.Union = @typeInfo(T).@"union";
-            const TagType = info.tag_type.?;
+            const info: Type.Union = @typeInfo(T).@"union";
 
-            const tag: TagType = value;
+            const tag = @backingInt(value);
 
             inline for (info.field_names, info.field_types) |fieldName, FieldType| {
                 const fieldTagValue = @field(TagType, fieldName);
@@ -201,7 +337,11 @@ inline fn serializeSignature(writer: *Io.Writer, signature: types.Signature) !vo
     try writer.writeAll(signature.signature);
 }
 
-/// Returns a comptime string of signature corresponding to `T`.
+pub fn validateSignature(comptime T: type, signature: []const u8) bool {
+    return mem.eql(u8, signature, signatureFromType(T));
+}
+
+/// Returns a comptime string of the signature corresponding to `T`.
 ///
 /// If `T` is bad, a compile error is shown.
 pub fn signatureFromType(comptime T: type) [:0]const u8 {
@@ -225,7 +365,7 @@ pub fn signatureFromType(comptime T: type) [:0]const u8 {
                     else => @compileError("Invalid number type"),
                 };
             if (types.isStruct(T)) {
-                const info: lang.Type.Struct = @typeInfo(@FieldType(T, "struct")).@"struct";
+                const info: Type.Struct = @typeInfo(@FieldType(T, "struct")).@"struct";
 
                 var fieldsSignature: []const u8 = "";
                 for (info.field_types) |FieldType| {
@@ -240,7 +380,7 @@ pub fn signatureFromType(comptime T: type) [:0]const u8 {
                 return "{" ++ keySignature ++ valueSignature ++ "}";
             }
             if (types.isArray(T)) {
-                const info: lang.Type.Pointer = @typeInfo(@FieldType(T, "array")).pointer;
+                const info: Type.Pointer = @typeInfo(@FieldType(T, "array")).pointer;
 
                 return "a" ++ signatureFromType(info.child);
             }
