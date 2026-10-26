@@ -31,12 +31,17 @@ pub fn OutMessage(comptime messageType: Header.MessageType, comptime Body: ?type
 
             const endian = header.endian;
 
-            const dbusEndian: u8 = switch (header.endian) {
+            const serializedEndian: u8 = switch (header.endian) {
                 .little => 'l',
                 .big => 'B',
             };
-            inline for (.{ dbusEndian, header.messageType, header.flags, header.version }) |byte|
-                try writer.writeByte(byte);
+
+            inline for (.{
+                serializedEndian,
+                @backingInt(header.messageType),
+                header.flags,
+                PROTOCOL_VERSION,
+            }) |byte| try writer.writeByte(byte);
 
             inline for (.{ header.serial, header.bodySize }) |int|
                 try writer.writeInt(@TypeOf(int), int, endian);
@@ -48,10 +53,14 @@ pub fn OutMessage(comptime messageType: Header.MessageType, comptime Body: ?type
         }
     };
 }
+
+/// Doesn't contain all the fields from the spec.
+///
+/// Instead, some fields are computed during serialization.
 pub const Header = struct {
     /// Endianness of bytes in the header and the body.
     ///
-    /// For outcoming messages, it is recommended to use the native endian.
+    /// It is recommended to use the native endian.
     ///
     /// Endianness affects only on:
     /// - Numbers
@@ -66,11 +75,6 @@ pub const Header = struct {
     ///
     /// See `Header.Flags`.
     flags: u8,
-
-    /// The major D-Bus protocol version.
-    version: u8, // TODO: rename to `protocolVersion`
-
-    bodySize: BodySize,
 
     /// Serial number of the message.
     serial: u32,
@@ -90,19 +94,11 @@ pub const Header = struct {
         errorName: types.VariantArrayEntry(4, types.Str),
 
         /// Serial number of the message this message is a reply to.
-        replySerial: types.VariantArrayEntry(5, ?u32),
+        replySerial: types.VariantArrayEntry(5, ?types.Num(u32)),
+
         destination: types.VariantArrayEntry(6, types.Str),
         sender: types.VariantArrayEntry(7, types.Str),
-        bodySignature: types.VariantArrayEntry(8, BodySignature), // TODO
-        unixFds: types.VariantArrayEntry(9, ?u32),
-
-        pub const BodySignature = struct {
-            comptime isAuto: true = true,
-            signature: [:0]const u8,
-
-            /// Compute the signature during serialization.
-            pub const AUTO: @This() = .{ .isAuto = true, .signature = &.{} };
-        };
+        unixFds: types.VariantArrayEntry(9, ?types.Num(u32)),
     });
 
     pub const MessageType = enum(u8) {
@@ -116,13 +112,6 @@ pub const Header = struct {
         pub const NO_AUTO_START = 0x2;
         pub const ALLOW_INTERACTIVE_AUTH = 0x4;
     };
-    pub const BodySize = struct {
-        comptime isAuto: true = true,
-        size: u32,
-
-        /// Compute the length during serialization
-        pub const AUTO = .{ .isAuto = true, .size = 0 };
-    };
 };
 
 /// Recursively (for containers) serializes `value` and writes the result to `writer`.
@@ -132,13 +121,23 @@ pub const Header = struct {
 /// Follows the passed `endian`, but in this library, it is better to use the native endian.
 pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: lang.Endian) Io.Writer.Error!void {
     switch (T) {
-        types.Bool => try writer.writeByte(@intFromBool(value)),
-        types.UnixFd => try writer.writeInt(posix.fd_t, value.fd, endian),
-        types.Str, types.ObjectPath => {
-            const slice: [:0]const u8 = @ptrCast(value);
+        // `Bool` is encoded as `u32`
+        types.Bool => try writer.writeInt(
+            u32,
+            @intFromBool(value),
+            endian,
+        ),
 
-            try writer.writeInt(u32, @intCast(slice.len), endian);
-            try writer.writeAll(slice);
+        types.UnixFd => try writer.writeInt(
+            @FieldType(T, "index"),
+            value.index,
+            endian,
+        ),
+        types.Str, types.ObjectPath => {
+            const str: [:0]const u8 = @ptrCast(value);
+
+            try writer.writeInt(u32, @intCast(str.len), endian);
+            try writer.writeAll(str);
         },
         types.Signature => try serializeSignature(writer, value),
         else => {
@@ -208,9 +207,7 @@ pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: la
         },
     }
 }
-
 inline fn serializeSignature(writer: *Io.Writer, signature: types.Signature) !void {
     try writer.writeByte(signature.signature.len);
-
     try writer.writeAll(signature.signature);
 }
