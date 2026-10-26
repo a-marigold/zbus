@@ -4,9 +4,12 @@ const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
 const lang = std.lang;
+const builtin = @import("builtin");
 const types = @import("types.zig");
 
 const Type = lang.Type;
+
+const ENDIAN = builtin.target.cpu.arch.endian();
 
 /// The current D-Bus protocol version.
 ///
@@ -29,9 +32,7 @@ pub fn OutMessage(comptime messageType: Header.MessageType, comptime Body: ?type
         pub fn serialize(self: *@This(), writer: *Io.Writer) !void {
             const header = self.header;
 
-            const endian = header.endian;
-
-            const serializedEndian: u8 = switch (header.endian) {
+            const serializedEndian: u8 = switch (ENDIAN) {
                 .little => 'l',
                 .big => 'B',
             };
@@ -44,7 +45,7 @@ pub fn OutMessage(comptime messageType: Header.MessageType, comptime Body: ?type
             }) |byte| try writer.writeByte(byte);
 
             inline for (.{ header.serial, header.bodySize }) |int|
-                try writer.writeInt(@TypeOf(int), int, endian);
+                try writer.writeInt(@TypeOf(int), int, ENDIAN);
 
             try serializeValue(writer, Header.Fields, header.fields);
 
@@ -56,18 +57,8 @@ pub fn OutMessage(comptime messageType: Header.MessageType, comptime Body: ?type
 
 /// Doesn't contain all the fields from the spec.
 ///
-/// Instead, some fields are computed during serialization.
+/// Instead, some fields are computed automatically during serialization.
 pub const Header = struct {
-    /// Endianness of bytes in the header and the body.
-    ///
-    /// It is recommended to use the native endian.
-    ///
-    /// Endianness affects only on:
-    /// - Numbers
-    /// - Lengths of strings
-    /// - Sizes of arrays
-    endian: lang.Endian,
-
     /// Type of the message.
     messageType: MessageType,
 
@@ -118,8 +109,8 @@ pub const Header = struct {
 ///
 /// UTF-8 in strings isn't validated.
 ///
-/// Follows the passed `endian`, but in this library, it is better to use the native endian.
-pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: lang.Endian) Io.Writer.Error!void {
+/// It is better to use the native `endian`.
+pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, comptime endian: lang.Endian) Io.Writer.Error!void {
     switch (T) {
         // `Bool` is encoded as `u32`
         types.Bool => try writer.writeInt(
