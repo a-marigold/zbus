@@ -1,7 +1,4 @@
-const std = @import("std");
-
+pub const types = @import("types.zig");
+pub const InMessage = @import("InMessage.zig");
+pub const outMessage = @import("outMessage.zig");
 pub const Conn = @import("Conn.zig");
-
-comptime {
-    std.testing.refAllDecls(Conn);
-}

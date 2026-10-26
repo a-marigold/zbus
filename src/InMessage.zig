@@ -1,10 +1,6 @@
-// TODO: there is too much static dispatching. Review all the generic functions carefully
-
-// TODO: Alignment formula: (offset + (alignment - 1)) & ~(alignment - 1)
+//! Incoming (unsolicited) message.
 
 // TODO: consider `unsupported endian` error
-
-// TODO: variants depth validation
 
 // TODO:
 // Store a fixed array containing slices of arrays in input and quantity of their elements
@@ -14,59 +10,14 @@
 const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
-const posix = std.posix;
 const lang = std.lang;
-const Type = lang.Type;
-const builtin = @import("builtin");
 const types = @import("types.zig");
 
-// TODO: more concrete error return types
+const Type = std.lang.Type;
 
-/// The current D-Bus protocol version.
-///
-/// All incoming and outcoming messages
-/// must have only this version in the header.
-pub const PROTOCOL_VERSION = 1;
+header: Header,
+body: []const u8,
 
-/// Value is taken from the spec.
-const MAX_ARRAY_DEPTH = 32;
-/// Value is taken from the spec.
-const MAX_STRUCT_DEPTH = 32;
-
-/// If the message doesn't need a body, `Body` can be `null`.
-pub fn Message(comptime messageType: Header.MessageType, comptime Body: ?type) type {
-    return struct {
-        header: Header,
-        body: if (Body) |BodyType| BodyType else @TypeOf(null),
-
-        pub const TYPE = messageType;
-
-        /// Serializes the message into bytes as per
-        /// the specification and writes the result to `writer`.
-        ///
-        /// UTF-8 in strings isn't validated.
-        pub fn serialize(self: *@This(), writer: *Io.Writer) !void {
-            const header = self.header;
-
-            const endian = header.endian;
-
-            const dbusEndian: u8 = switch (header.endian) {
-                .little => 'l',
-                .big => 'B',
-            };
-            inline for (.{ dbusEndian, header.messageType, header.flags, header.version }) |byte|
-                try writer.writeByte(byte);
-
-            inline for (.{ header.serial, header.bodySize }) |int|
-                try writer.writeInt(@TypeOf(int), int, endian);
-
-            try serializeValue(writer, Header.Fields, header.fields);
-
-            if (Body) |BodyType|
-                try serializeValue(writer, BodyType, self.body);
-        }
-    };
-}
 pub const Header = struct {
     /// Endianness of bytes in the header and the body.
     ///
@@ -290,7 +241,7 @@ fn parseValueInner(
                 const fieldSignatures = block: {
                     var signatures: [info.field_types.len][:0]const u8 = undefined;
                     inline for (info.field_types, &signatures) |FieldType, signature|
-                        signature.* = signatureFromType(FieldType);
+                        signature.* = types.signatureFromType(FieldType);
 
                     break :block signatures;
                 };
@@ -373,92 +324,4 @@ inline fn parseStrLike(
         .value = str,
         .size = strLenSize + fullStr.len,
     };
-}
-
-/// Recursively (for containers) serializes `value` and writes the result to `writer`.
-///
-/// UTF-8 in strings isn't validated.
-///
-/// Follows the passed `endian`, but in this library, it is better to use the native endian.
-pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, endian: lang.Endian) !void {
-    switch (T) {
-        types.Bool => try writer.writeByte(@intFromBool(value)),
-        types.UnixFd => try writer.writeInt(posix.fd_t, value.fd, endian),
-        types.Str, types.ObjectPath => {
-            const slice: [:0]const u8 = @ptrCast(value);
-
-            try writer.writeInt(u32, @intCast(slice.len), endian);
-            try writer.writeAll(slice);
-        },
-        types.Signature => try serializeSignature(writer, value),
-        else => {
-            if (types.isNum(T)) return writer.writeInt(
-                @FieldType(T, "num"),
-                @field(value, "num"),
-                endian,
-            );
-
-            if (types.isStruct(T)) {
-                const info: Type.Struct = @typeInfo(T).@"struct";
-
-                inline for (info.field_names, info.field_types) |fieldName, FieldType|
-                    try serializeValue(
-                        writer,
-                        FieldType,
-                        @field(value, fieldName),
-                        endian,
-                    );
-                return;
-            }
-
-            if (types.isDictEntry(T)) {
-                try serializeValue(
-                    writer,
-                    @FieldType(T, "key"),
-                    @field(value, "key"),
-                    endian,
-                );
-                try serializeValue(
-                    writer,
-                    @FieldType(T, "value"),
-                    @field(value, "value"),
-                    endian,
-                );
-                return;
-            }
-            if (types.isArray(T)) {
-                const ElType = @typeInfo(T).pointer.child;
-
-                for (value.array) |el| try serializeValue(writer, ElType, el, endian);
-                return;
-            }
-            if (types.isVariant(T)) {
-                const info: Type.Union = @typeInfo(@FieldType(T, "variant")).@"union";
-                const TagType = info.tag_type.?;
-
-                const tag = @backingInt(value);
-
-                inline for (info.field_names, info.field_types) |fieldName, FieldType| {
-                    const fieldTagValue = @field(TagType, fieldName);
-                    if (fieldTagValue == tag) {
-                        try serializeSignature(writer, .init(signatureFromType(FieldType)));
-
-                        try serializeValue(
-                            writer,
-                            FieldType,
-                            @field(value, fieldName),
-                            endian,
-                        );
-                    }
-                }
-                return;
-            }
-
-            @compileError("Unknown type `T`");
-        },
-    }
-}
-inline fn serializeSignature(writer: *Io.Writer, signature: types.Signature) !void {
-    try writer.writeByte(signature.signature.len);
-    try writer.writeAll(signature.signature);
 }

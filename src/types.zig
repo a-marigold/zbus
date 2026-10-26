@@ -38,7 +38,7 @@ pub fn Num(comptime T: type) type {
 
         pub const __IS_ZBUS_NUM__ = true;
 
-        pub fn init(num: T) @This() {
+        pub inline fn init(num: T) @This() {
             return .{ .num = num };
         }
     };
@@ -54,7 +54,7 @@ pub const Bool = bool;
 pub const UnixFd = struct {
     index: u32,
 
-    pub fn init(index: u32) @This() {
+    pub inline fn init(index: u32) @This() {
         return .{ .index = index };
     }
 };
@@ -64,14 +64,14 @@ pub const Str = [:0]const u8;
 pub const ObjectPath = struct {
     path: [:0]const u8,
 
-    pub fn init(path: [:0]const u8) @This() {
+    pub inline fn init(path: [:0]const u8) @This() {
         return .{ .path = path };
     }
 };
 
 pub const Signature = struct {
     signature: [:0]const u8,
-    pub fn init(signature: [:0]const u8) @This() {
+    pub inline fn init(signature: [:0]const u8) @This() {
         return .{ .signature = signature };
     }
 };
@@ -90,7 +90,7 @@ pub fn Struct(comptime T: type) type {
 
         pub const __IS_ZBUS_STRUCT__ = true;
 
-        pub fn init(@"struct": T) @This() {
+        pub inline fn init(@"struct": T) @This() {
             return .{ .@"struct" = @"struct" };
         }
     };
@@ -108,7 +108,7 @@ pub fn Array(comptime E: type) type {
 
         pub const __IS_ZBUS_ARRAY__ = true;
 
-        pub fn init(array: []const E) @This() {
+        pub inline fn init(array: []const E) @This() {
             return .{ .array = array };
         }
     };
@@ -134,7 +134,7 @@ pub fn DictEntry(comptime K: type, comptime V: type) type {
 
         pub const __IS_ZBUS_DICT_ENTRY__ = true;
 
-        pub fn init(key: K, value: V) @This() {
+        pub inline fn init(key: K, value: V) @This() {
             return .{ .entry = .{ .key = key, .value = value } };
         }
     };
@@ -173,7 +173,7 @@ pub fn Variant(comptime U: type) type {
 
         pub const __IS_ZBUS_VARIANT__ = true;
 
-        pub fn init(variant: U) @This() {
+        pub inline fn init(variant: U) @This() {
             return .{ .variant = variant };
         }
     };
@@ -211,7 +211,7 @@ pub fn VariantArray(comptime T: type) type {
 
         pub const __IS_ZBUS_STATIC_VARIANT_ARRAY__ = true;
 
-        pub fn init(@"struct": T) @This() {
+        pub inline fn init(@"struct": T) @This() {
             return .{ .@"struct" = @"struct" };
         }
     };
@@ -228,7 +228,7 @@ pub fn VariantArrayEntry(key: anytype, comptime V: type) type {
 
         pub const __IS_ZBUS_STATIC_VARIANT_ARRAY_ENTRY__ = true;
 
-        pub fn init(value: V) @This() {
+        pub inline fn init(value: V) @This() {
             return .{ .value = value };
         }
     };

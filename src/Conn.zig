@@ -1,5 +1,9 @@
 //! Supports only connections over UNIX domain sockets.
 
+// TODO: there is too much static dispatching. Review all the generic functions carefully
+
+// TODO: more concrete error return types
+
 const std = @import("std");
 const Io = std.Io;
 const net = Io.net;
