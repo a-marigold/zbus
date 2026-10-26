@@ -11,12 +11,8 @@ pub fn build(b: *Build) void {
         .optimize = optimize,
     });
 
-    const lib = b.addLibrary(.{
-        .name = "zbus",
-        .root_module = rootMod,
-        .linkage = .static,
-    });
+    const testMod = b.addTest(.{ .root_module = rootMod });
 
     const checkStep = b.step("check", "Build on save");
-    checkStep.dependOn(&lib.step);
+    checkStep.dependOn(&testMod.step);
 }
