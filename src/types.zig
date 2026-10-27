@@ -29,14 +29,22 @@ const MAX_STRUCT_DEPTH = 32;
 /// `i16`, `i32`, `i64` or
 /// `f64`.
 pub fn Num(comptime T: type) type {
-    if (T == u8 or T == u16 or T == u32 or T == u64 or
-        T == i16 or T == i32 or T == i64 or
-        T == f64) @compileError("Invalid number type");
+    if (T != u8 and T != u16 and T != u32 and T != u64 and
+        T != i16 and T != i32 and T != i64 and
+        T != f64) @compileError("Invalid number type");
 
     return struct {
         num: T,
 
         pub const __IS_ZBUS_NUM__ = true;
+
+        pub const ALIGNMENT = switch (T) {
+            u8 => 1,
+            u16, i16 => 2,
+            u32, i32 => 4,
+            u64, i64, f64 => 8,
+            else => unreachable,
+        };
 
         pub inline fn init(num: T) @This() {
             return .{ .num = num };
@@ -47,22 +55,48 @@ pub inline fn isNum(comptime T: type) type {
     return @hasField(T, "__IS_ZBUS_NUM__");
 }
 
-pub const Bool = bool;
+pub const Bool = struct {
+    bool: bool,
+
+    // `Bool` is encoded as `u32`,
+    // so the alignment is 4
+    pub const ALIGNMENT = 4;
+
+    pub inline fn init(@"bool": bool) @This() {
+        return .{ .bool = @"bool" };
+    }
+};
 
 /// Not a file descriptor itself, but an index
 /// of the UNIX socket message ancillary array with file descriptors.
 pub const UnixFd = struct {
     index: u32,
 
+    pub const ALIGNMENT = 4;
+
     pub inline fn init(index: u32) @This() {
         return .{ .index = index };
     }
 };
 
-pub const Str = [:0]const u8;
+pub const Str = struct {
+    str: [:0]const u8,
+
+    // Length of `Str` is encoded
+    // as `u32`, so the alignment is 4
+    pub const ALIGNMENT = 4;
+
+    pub inline fn init(str: [:0]const u8) @This() {
+        return .{ .str = str };
+    }
+};
 
 pub const ObjectPath = struct {
     path: [:0]const u8,
+
+    // Length of `ObjectPath` is encoded
+    // as `u32`, so the alignment is 4
+    pub const ALIGNMENT = 4;
 
     pub inline fn init(path: [:0]const u8) @This() {
         return .{ .path = path };
@@ -71,11 +105,14 @@ pub const ObjectPath = struct {
 
 pub const Signature = struct {
     signature: [:0]const u8,
+
+    // Length of `Signature` is `u8` and its content
+    // also consists of `u8`, so it doesn't require an alignment
+
     pub inline fn init(signature: [:0]const u8) @This() {
         return .{ .signature = signature };
     }
 };
-
 /// Returns a D-Bus struct, created from zig's struct `T`.
 ///
 /// It is guaranteed that fields of the struct will
@@ -89,6 +126,8 @@ pub fn Struct(comptime T: type) type {
         @"struct": T,
 
         pub const __IS_ZBUS_STRUCT__ = true;
+
+        pub const ALIGNMENT = 8;
 
         pub inline fn init(@"struct": T) @This() {
             return .{ .@"struct" = @"struct" };
@@ -107,6 +146,11 @@ pub fn Array(comptime E: type) type {
         array: []const E,
 
         pub const __IS_ZBUS_ARRAY__ = true;
+
+        // Length of `Array` is encoded as `u32`,
+        // so the alignment is 4.
+        // Alignment of elements is handled independently
+        pub const ALIGNMENT = 4;
 
         pub inline fn init(array: []const E) @This() {
             return .{ .array = array };
@@ -133,6 +177,8 @@ pub fn DictEntry(comptime K: type, comptime V: type) type {
         entry: struct { key: K, value: V },
 
         pub const __IS_ZBUS_DICT_ENTRY__ = true;
+
+        pub const ALIGNEMNT = 8;
 
         pub inline fn init(key: K, value: V) @This() {
             return .{ .entry = .{ .key = key, .value = value } };
@@ -173,6 +219,12 @@ pub fn Variant(comptime U: type) type {
 
         pub const __IS_ZBUS_VARIANT__ = true;
 
+        // `Variant` is marshaled as `Signature` of
+        // the variant value, followed by that value.
+        // `Signature` doesn't require alignment,
+        // so `Variant` also doesn't.
+        // Alignment of the value is handled independently
+
         pub inline fn init(variant: U) @This() {
             return .{ .variant = variant };
         }
@@ -211,6 +263,11 @@ pub fn VariantArray(comptime T: type) type {
 
         pub const __IS_ZBUS_STATIC_VARIANT_ARRAY__ = true;
 
+        // Length of `Array` is encoded as `u32`,
+        // so the alignment is 4.
+        // Alignment of elements is handled independently
+        pub const ALIGNMENT = 4;
+
         pub inline fn init(@"struct": T) @This() {
             return .{ .@"struct" = @"struct" };
         }
@@ -219,6 +276,7 @@ pub fn VariantArray(comptime T: type) type {
 pub inline fn isVariantArray(comptime T: type) type {
     return @hasField(T, "__IS_ZBUS_STATIC_VARIANT_ARRAY__");
 }
+
 /// `key` is a comptime-known value of any D-Bus type.
 pub fn VariantArrayEntry(key: anytype, comptime V: type) type {
     return struct {
@@ -227,6 +285,8 @@ pub fn VariantArrayEntry(key: anytype, comptime V: type) type {
         pub const KEY = key;
 
         pub const __IS_ZBUS_STATIC_VARIANT_ARRAY_ENTRY__ = true;
+
+        // TODO: alignment
 
         pub inline fn init(value: V) @This() {
             return .{ .value = value };
@@ -247,6 +307,7 @@ fn isType(comptime T: type) bool {
     };
 }
 
+/// Returns `true` is `signature` matches type `T`.
 pub fn validateSignature(comptime T: type, signature: []const u8) bool {
     return mem.eql(u8, signature, signatureFromType(T));
 }
