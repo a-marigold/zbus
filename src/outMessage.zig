@@ -109,82 +109,138 @@ pub const Header = struct {
 /// UTF-8 in strings isn't validated.
 ///
 /// It is better to use the native `endian`.
-pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, comptime endian: lang.Endian) Io.Writer.Error!void {
-    switch (T) {
-        // `Bool` is encoded as `u32`
-        types.Bool => try writer.writeInt(
-            u32,
-            @intFromBool(value),
-            endian,
-        ),
+pub fn serializeValue(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian) Io.Writer.Error!void {
+    return serializeValueInner(writer, value, endian, 0);
+}
+fn serializeValueInner(
+    writer: *Io.Writer,
+    value: anytype,
+    comptime endian: lang.Endian,
+    /// Amount of written bytes.
+    ///
+    /// Used to align values.
+    pos: usize,
+) Io.Writer.Error!void {
+    const T = @TypeOf(value);
 
-        types.UnixFd => try writer.writeInt(
-            @FieldType(T, "index"),
-            value.index,
-            endian,
-        ),
+    switch (T) {
+        types.Bool => {
+            try alignValue(writer, T, pos);
+
+            // `Bool` is encoded as `u32`
+            try writer.writeInt(u32, @intFromBool(value.bool), endian);
+        },
+        types.UnixFd => {
+            try alignValue(writer, T, pos);
+
+            try writer.writeInt(
+                @FieldType(T, "index"),
+                value.index,
+                endian,
+            );
+        },
         types.Str, types.ObjectPath => {
             const str: [:0]const u8 = @ptrCast(value);
+
+            try alignValue(writer, T, pos);
 
             try writer.writeInt(u32, @intCast(str.len), endian);
             try writer.writeAll(str);
         },
+
+        // Signatures don't require alignment 'cause they start from `u8` (the length)
         types.Signature => try serializeSignature(writer, value),
+
         else => {
-            if (types.isNum(T)) return writer.writeInt(
-                @FieldType(T, "num"),
-                @field(value, "num"),
-                endian,
-            );
+            if (types.isNum(T)) {
+                if (@typeInfo(T).int.bits == 8) return writer.writeByte(value.num);
+
+                try alignValue(writer, T, pos);
+
+                return writer.writeInt(
+                    @FieldType(T, "num"),
+                    value.num,
+                    endian,
+                );
+            }
 
             if (types.isStruct(T)) {
-                const info: Type.Struct = @typeInfo(T).@"struct";
+                const info = @typeInfo(T).@"struct";
 
-                inline for (info.field_names, info.field_types) |fieldName, FieldType|
+                // Align the struct
+                try alignValue(writer, T, pos);
+
+                // The first value is already aligned by the struct alignment
+                try serializeValue(
+                    writer,
+                    @field(value.@"struct", info.field_names[0]),
+                    endian,
+                );
+
+                inline for (info.field_names[1..]) |fieldName| {
+                    try alignValue(writer, T, pos);
+
                     try serializeValue(
                         writer,
-                        FieldType,
-                        @field(value, fieldName),
+                        @field(value.@"struct", fieldName),
                         endian,
                     );
+                }
                 return;
             }
 
             if (types.isDictEntry(T)) {
+                // Align the dict entry
+                try alignValue(writer, T, pos);
+
+                // Key is already aligned by the dict entry alignment
                 try serializeValue(
                     writer,
-                    @FieldType(T, "key"),
-                    @field(value, "key"),
+                    value.key,
                     endian,
                 );
+
+                try alignValue(writer, @FieldType(T, "value"), pos);
                 try serializeValue(
                     writer,
-                    @FieldType(T, "value"),
-                    @field(value, "value"),
+                    value.value,
                     endian,
                 );
                 return;
             }
             if (types.isArray(T)) {
-                const ElType = @typeInfo(T).pointer.child;
+                // Align the array
+                try alignValue(writer, T, pos);
 
-                for (value.array) |el| try serializeValue(writer, ElType, el, endian);
+                // The first el is already aligned by the array alignment
+                try serializeValue(writer, value[0], endian);
+
+                const ElType = @typeInfo(T).pointer.child;
+                for (value.array[1..]) |el| {
+                    try alignValue(writer, ElType, endian);
+                    try serializeValue(writer, el, endian);
+                }
                 return;
             }
             if (types.isVariant(T)) {
-                const info: Type.Union = @typeInfo(@FieldType(T, "variant")).@"union";
-                const TagType = info.tag_type.?;
+                const info = @typeInfo(@FieldType(T, "variant")).@"union";
 
-                const tag = @backingInt(value);
+                const TagType = info.tag_type.?;
+                const tag: TagType = @backingInt(value);
 
                 inline for (info.field_names, info.field_types) |fieldName, FieldType| {
-                    const fieldTagValue = @field(TagType, fieldName);
+                    const fieldTag = @field(TagType, fieldName);
 
-                    if (fieldTagValue == tag) {
-                        try serializeSignature(writer, comptime .init(types.signatureFromType(FieldType)));
+                    if (fieldTag == tag) {
+                        // Signatures don't require alignment 'cause they start from a byte
+                        try serializeSignature(
+                            writer,
+                            comptime .init(types.signatureFromType(FieldType)),
+                        );
+
+                        try alignValue(writer, FieldType, pos);
                         try serializeValue(
                             writer,
-                            FieldType,
                             @field(value, fieldName),
                             endian,
                         );
