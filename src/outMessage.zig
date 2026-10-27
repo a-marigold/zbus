@@ -1,5 +1,3 @@
-// TODO: Alignment formula: (offset + (alignment - 1)) & ~(alignment - 1)
-
 const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
@@ -7,9 +5,9 @@ const lang = std.lang;
 const builtin = @import("builtin");
 const types = @import("types.zig");
 
-const Type = lang.Type;
-
 const ENDIAN = builtin.target.cpu.arch.endian();
+
+// TODO: better compile error messages
 
 /// The current D-Bus protocol version.
 ///
@@ -92,6 +90,7 @@ pub const Header = struct {
         unixFds: types.VariantArrayEntry(9, ?types.Num(u32)),
     });
 
+    // TODO: It's dublicated with `InMessage`
     pub const MessageType = enum(u8) {
         MethodCall = 1,
         MethodReturn = 2,
@@ -198,7 +197,34 @@ pub fn serializeValue(writer: *Io.Writer, comptime T: type, value: T, comptime e
         },
     }
 }
-inline fn serializeSignature(writer: *Io.Writer, signature: types.Signature) !void {
+inline fn serializeSignature(writer: *Io.Writer, signature: types.Signature) Io.Writer.Error!void {
     try writer.writeByte(signature.signature.len);
     try writer.writeAll(signature.signature);
+}
+
+/// Writes required amount of alignment padding bytes to `writer` so
+/// a value of type `T` is aligned if written afterwards.
+///
+/// `pos` is the number of totally written bytes to `writer`.
+pub inline fn alignValue(writer: *Io.Writer, comptime T: type, pos: usize) Io.Writer.Error!void {
+    // TODO: Use something more efficient than a loop with `writeByte`
+
+    const paddingBytes = getAlignmentPadding(
+        pos,
+        @field(T, "ALIGNMENT"),
+    );
+
+    for (0..paddingBytes) |_|
+        try writer.writeByte(0);
+}
+
+/// Returns the amount of bytes that `addr` is missing to be aligned forward.
+pub inline fn getAlignmentPadding(addr: usize, comptime alignment: u64) usize {
+    // It's faster than `mem.alignForward(addr) - addr`
+
+    // It's the same as `alignment - (addr % alignment)`.
+    // For `addr = 11` and `alignment = 8`:
+    // 8 - (11 % 8) = 8 - 3 = 5
+    // 11 + 5 = 16 -> Correct alignment
+    return -addr & (alignment - 1);
 }
