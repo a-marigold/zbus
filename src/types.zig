@@ -166,19 +166,22 @@ pub inline fn isArray(comptime T: type) bool {
 /// `K` must be `Num`, `Bool`, `UnixFd`, `Str` `ObjectPath`
 /// or `Signature`, but not a container like `Struct`, `Array` or `Variant`.
 ///
-/// Dict entry must only be array elements, and if
-/// a one isn't in an array, serialization fails at comptime.
+/// Dict entries must only be array elements, and if
+/// one isn't in an array, serialization fails at comptime.
 pub fn DictEntry(comptime K: type, comptime V: type) type {
     // TODO:
 
-    if (K) {}
+    if (K != Str and K != ObjectPath and K != Signature and
+        K != Bool and K != UnixFd and !isNum(K)) @compileError("Invalid key type `K`");
+
+    if (!isType(V)) @compileError("Invalid value type `V`");
 
     return struct {
         entry: struct { key: K, value: V },
 
         pub const __IS_ZBUS_DICT_ENTRY__ = true;
 
-        pub const ALIGNEMNT = 8;
+        pub const ALIGNMENT = 8;
 
         pub inline fn init(key: K, value: V) @This() {
             return .{ .entry = .{ .key = key, .value = value } };
@@ -219,7 +222,7 @@ pub fn Variant(comptime U: type) type {
 
         pub const __IS_ZBUS_VARIANT__ = true;
 
-        // `Variant` is marshaled as `Signature` of
+        // `Variant` is serialized as `Signature` of
         // the variant value, followed by that value.
         // `Signature` doesn't require alignment,
         // so `Variant` also doesn't.
