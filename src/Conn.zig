@@ -13,9 +13,10 @@ const math = std.math;
 const fmt = std.fmt;
 const posix = std.posix;
 const linux = std.os.linux;
-const message = @import("message.zig");
+const InMessage = @import("InMessage.zig");
+const out_message = @import("out_message.zig");
 
-const Message = message.Message;
+const OutMessage = out_message.OutMessage;
 
 const SYSTEM_BUS_PATH = "/var/run/dbus/system_bus_socket";
 const SYSTEM_BUS_ENV_NAME = "DBUS_SYSTEM_BUS_ADDRESS";
@@ -33,42 +34,37 @@ pub const InitError = error{
 } || AuthError;
 /// Creates a socket, connects to the D-Bus broker by `busPath`,
 /// authentificates the connection and says Hello.
-pub fn init(io: Io, busPath: []const u8, options: Options) InitError!@This() {
-    const socket: net.UnixAddress = .init(busPath) catch return InitError.BusPathTooLong;
+pub fn init(io: Io, bus_path: []const u8, options: Options) InitError!@This() {
+    const socket = net.UnixAddress.init(bus_path) catch return InitError.BusPathTooLong;
 
     const stream = socket.connect(io) catch return InitError.ConnectFail;
-    errdefer stream.close();
+    errdefer stream.close(io);
 
-    var reader = stream.reader(io, options.readerBuffer);
-    const ioReader = &reader.interface;
+    var reader = stream.reader(io, options.reader_buffer);
+    const io_reader = &reader.interface;
 
-    var writer = stream.writer(io, options.writerBuffer);
-    const ioWriter = &writer.interface;
+    var writer = stream.writer(io, options.writer_buffer);
+    const io_writer = &writer.interface;
 
-    try authentificate(ioReader, ioWriter, options.isNegotiateUnixFd);
+    try authentificate(io_reader, io_writer, options.is_negotiate_unix_fd);
 
     // Send hello message and the broker
     // will assign an unique ID for this connection
-    const helloMessage: Message(null) = .{
+    const hello_message: OutMessage(.MethodCall, null) = .{
         .header = .{
-            .endian = .native,
-            .type = .MethodCall,
             .flags = 0,
-            .version = message.VERSION,
             .serial = 1,
-            .bodySize = .AUTO,
-            .fields = .{
-                .objectPath = "/org/freedesktop/DBus",
-                .interface = "org.freedesktop.DBus",
-                .method = "Hello",
-                .bodySignature = .AUTO,
-            },
+            .fields = .init(.{
+                .object_path = .init(.init("/org/freedesktop/DBus")),
+                .interface = .init(.init("org.freedesktop.DBus")),
+                .method = .init(.init("Hello")),
+            }),
         },
         .body = null,
     };
 
-    helloMessage.serialize(ioWriter) catch return InitError.SendHelloFail;
-    ioWriter.flush() catch return InitError.SendHelloFail;
+    hello_message.serialize(io_writer) catch return InitError.SendHelloFail;
+    io_writer.flush() catch return InitError.SendHelloFail;
 
     // TODO: handle reply
 
@@ -80,10 +76,10 @@ pub fn init(io: Io, busPath: []const u8, options: Options) InitError!@This() {
 }
 const Options = struct {
     /// Whether to allow passing UNIX fds over the connection.
-    comptime isNegotiateUnixFd: bool = false,
+    comptime is_negotiate_unix_fd: bool = false,
 
-    readerBuffer: []const u8,
-    writerBuffer: []const u8,
+    reader_buffer: []u8,
+    writer_buffer: []u8,
 };
 
 const AuthError = error{ AuthExternalFail, NegotiateUnixFdFail };
@@ -91,41 +87,45 @@ const AuthError = error{ AuthExternalFail, NegotiateUnixFdFail };
 /// is `true`, sets up file descriptors negotiation.
 ///
 /// `reader` and `writer` are the socket reader and writer.
-fn authentificate(reader: *Io.Reader, writer: *Io.Writer, comptime isNegotiateUnixFd: bool) AuthError!void {
+fn authentificate(reader: *Io.Reader, writer: *Io.Writer, comptime is_negotiate_unix_fd: bool) AuthError!void {
     // Credentials passing as per the protocol
     writer.writeByte(0) catch return AuthError.AuthExternalFail;
     writer.flush() catch return AuthError.AuthExternalFail;
 
     // `AUTH EXTERNAL` command
-    const hexUidString = block: {
+    const hex_ascii_uid = block: {
         const uid = getUid();
 
-        const maxUidString = comptime fmt.comptimePrint("{d}", .{math.maxInt(@TypeOf(uid))});
-        const maxHexUidString = comptime fmt.comptimePrint("{X}", .{maxUidString});
+        // UID number first in ASCII,
+        // then every its ASCII code unit
+        // in ASCII, but as hex number
 
-        var buffer: [maxHexUidString.len]u8 = undefined;
+        const max_ascii_uid = comptime fmt.comptimePrint("{d}", .{math.maxInt(@TypeOf(uid))});
+        const max_hex_ascii_uid = comptime fmt.comptimePrint("{X}", .{max_ascii_uid});
 
-        const uidString = mem.print(&buffer, "{d}", .{uid}) catch unreachable;
+        var buffer: [max_hex_ascii_uid.len]u8 = undefined;
 
-        break :block mem.print(&buffer, "{X}", .{uidString}) catch unreachable;
+        const ascii_uid = mem.print(&buffer, "{d}", .{uid}) catch unreachable;
+
+        break :block mem.print(&buffer, "{X}", .{ascii_uid}) catch unreachable;
     };
 
-    writer.print("AUTH EXTERNAL {s}\r\n", .{hexUidString}) catch return AuthError.AuthExternalFail;
+    writer.print("AUTH EXTERNAL {s}\r\n", .{hex_ascii_uid}) catch return AuthError.AuthExternalFail;
     writer.flush() catch return AuthError.AuthExternalFail;
 
-    const authResponse = reader.takeDelimiterInclusive('\n') catch return AuthError.AuthExternalFail;
-    if (authResponse.len > 2 and
-        authResponse[0] == 'O' and authResponse[1] == 'K') return AuthError.AuthExternalFail;
+    const auth_response = reader.takeDelimiterInclusive('\n') catch return AuthError.AuthExternalFail;
+    if (auth_response.len > 2 and
+        auth_response[0] == 'O' and auth_response[1] == 'K') return AuthError.AuthExternalFail;
 
     // `NEGOTIATE_UNIX_FD` command
-    if (comptime isNegotiateUnixFd) {
+    if (comptime is_negotiate_unix_fd) {
         writer.writeAll("NEGOTIATE_UNIX_FD\r\n") catch return AuthError.NegotiateUnixFdFail;
         writer.flush() catch return AuthError.NegotiateUnixFdFail;
 
-        const negotiateUnixFdResponse =
+        const negotiate_unix_fd_response =
             reader.takeDelimiterInclusive('\n') catch return AuthError.NegotiateUnixFdFail;
 
-        if (!mem.eql(u8, negotiateUnixFdResponse, "AGREE_UNIX_FD\r\n"))
+        if (!mem.eql(u8, negotiate_unix_fd_response, "AGREE_UNIX_FD\r\n"))
             return AuthError.AuthExternalFail;
     }
 
@@ -158,26 +158,26 @@ pub const BusType = enum { System, Session };
 
 pub const BusPathError = error{ PathNotFound, InvalidPath };
 /// Returns a file-system or abstract path of the broker's UNIX domain socket.
-pub fn getBusPath(comptime busType: BusType, env: process.Environ) BusPathError![]const u8 {
-    const envPath = switch (busType) {
+pub fn getBusPath(comptime bus_type: BusType, env: process.Environ) BusPathError![]const u8 {
+    const env_path = switch (bus_type) {
         .System => env.getPosix(SYSTEM_BUS_ENV_NAME) orelse return SYSTEM_BUS_PATH,
         .Session => env.getPosix(SESSION_BUS_ENV_NAME) orelse return BusPathError.PathNotFound,
     };
 
-    const pathPrefix = "unix:";
+    const path_prefix = "unix:";
 
-    if (!mem.startsWith(u8, envPath, pathPrefix))
+    if (!mem.startsWith(u8, env_path, path_prefix))
         return BusPathError.InvalidPath;
 
-    const path = envPath[pathPrefix..];
+    const path = env_path[path_prefix..];
 
-    const fsPathKey = "path=";
-    const abstractPathKey = "abstract=";
+    const fs_path_key = "path=";
+    const abstract_path_key = "abstract=";
 
-    if (mem.startsWith(u8, path, fsPathKey))
-        return path[fsPathKey..]
-    else if (mem.startsWith(u8, path, abstractPathKey))
-        return path[abstractPathKey..];
+    if (mem.startsWith(u8, path, fs_path_key))
+        return path[fs_path_key..]
+    else if (mem.startsWith(u8, path, abstract_path_key))
+        return path[abstract_path_key..];
 
     return BusPathError.InvalidPath;
 }

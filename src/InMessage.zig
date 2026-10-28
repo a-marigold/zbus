@@ -29,14 +29,14 @@ pub const Header = struct {
     /// - Sizes of arrays
     endian: lang.Endian,
 
-    messageType: MessageType,
+    message_type: MessageType,
 
     /// `0` means no flag is selected.
     ///
     /// See `Header.Flags`.
     flags: u8,
 
-    bodyLen: u32,
+    body_len: u32,
 
     /// Serial number of the message.
     serial: u32,
@@ -50,19 +50,19 @@ pub const Header = struct {
     ///
     /// Codes of fields are taken from https://dbus.freedesktop.org/doc/dbus-specification.html#message-protocol-messages.
     pub const Fields = types.VariantArray(struct {
-        objectPath: types.VariantArrayEntry(1, ?types.ObjectPath),
+        object_path: types.VariantArrayEntry(1, ?types.ObjectPath),
         interface: types.VariantArrayEntry(2, ?types.Str),
         method: types.VariantArrayEntry(3, ?types.Str),
-        errorName: types.VariantArrayEntry(4, ?types.Str),
+        error_name: types.VariantArrayEntry(4, ?types.Str),
 
         /// Serial number of the message this message is a reply to.
-        replySerial: types.VariantArrayEntry(5, ?types.Num(u32)),
+        reply_serial: types.VariantArrayEntry(5, ?types.Num(u32)),
 
         destination: types.VariantArrayEntry(6, ?types.Str),
         sender: types.VariantArrayEntry(7, ?types.Str),
 
-        bodySignature: types.VariantArrayEntry(8, ?types.Signature),
-        unixFds: types.VariantArrayEntry(9, ?types.Num(u32)),
+        body_signature: types.VariantArrayEntry(8, ?types.Signature),
+        unix_fds: types.VariantArrayEntry(9, ?types.Num(u32)),
     });
 
     pub const MessageType = enum(u8) {

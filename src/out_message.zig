@@ -1,3 +1,5 @@
+//! Outgoing message.
+
 const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
@@ -16,12 +18,12 @@ const ENDIAN = builtin.target.cpu.arch.endian();
 pub const PROTOCOL_VERSION = 1;
 
 /// If the message doesn't need a body, `Body` can be `null`.
-pub fn OutMessage(comptime messageType: Header.MessageType, comptime Body: ?type) type {
+pub fn OutMessage(comptime message_type: Header.MessageType, comptime Body: ?type) type {
     return struct {
         header: Header,
         body: if (Body) |BodyType| BodyType else @TypeOf(null),
 
-        pub const TYPE = messageType;
+        pub const TYPE = message_type;
 
         /// Serializes the message into bytes as per
         /// the specification and writes the result to `writer`.
@@ -30,14 +32,14 @@ pub fn OutMessage(comptime messageType: Header.MessageType, comptime Body: ?type
         pub fn serialize(self: *@This(), writer: *Io.Writer) !void {
             const header = self.header;
 
-            const serializedEndian: u8 = switch (ENDIAN) {
+            const serialized_endian: u8 = switch (ENDIAN) {
                 .little => 'l',
                 .big => 'B',
             };
 
             inline for (.{
-                serializedEndian,
-                @backingInt(header.messageType),
+                serialized_endian,
+                @backingInt(header.message_type),
                 header.flags,
                 PROTOCOL_VERSION,
             }) |byte| try writer.writeByte(byte);
@@ -58,7 +60,7 @@ pub fn OutMessage(comptime messageType: Header.MessageType, comptime Body: ?type
 /// Instead, some fields are computed automatically during serialization.
 pub const Header = struct {
     /// Type of the message.
-    messageType: MessageType,
+    message_type: MessageType,
 
     /// `0` means no flag is selected.
     ///
@@ -77,17 +79,17 @@ pub const Header = struct {
     ///
     /// Codes of fields are taken from https://dbus.freedesktop.org/doc/dbus-specification.html#message-protocol-messages.
     pub const Fields = types.VariantArray(struct {
-        objectPath: types.VariantArrayEntry(1, types.ObjectPath),
+        object_path: types.VariantArrayEntry(1, types.ObjectPath),
         interface: types.VariantArrayEntry(2, types.Str),
         method: types.VariantArrayEntry(3, types.Str),
-        errorName: types.VariantArrayEntry(4, types.Str),
+        error_name: types.VariantArrayEntry(4, types.Str),
 
         /// Serial number of the message this message is a reply to.
-        replySerial: types.VariantArrayEntry(5, ?types.Num(u32)),
+        reply_serial: types.VariantArrayEntry(5, ?types.Num(u32)),
 
         destination: types.VariantArrayEntry(6, types.Str),
         sender: types.VariantArrayEntry(7, types.Str),
-        unixFds: types.VariantArrayEntry(9, ?types.Num(u32)),
+        unix_fds: types.VariantArrayEntry(9, ?types.Num(u32)),
     });
 
     // TODO: It's dublicated with `InMessage`
@@ -97,6 +99,7 @@ pub const Header = struct {
         Error = 3,
         Signal = 4,
     };
+
     pub const Flags = struct {
         pub const NO_REPLY_EXPECTED = 0x1;
         pub const NO_AUTO_START = 0x2;
@@ -177,12 +180,12 @@ fn serializeValueInner(
                     endian,
                 );
 
-                inline for (info.field_names[1..]) |fieldName| {
+                inline for (info.field_names[1..]) |field_name| {
                     try alignValue(writer, T, pos);
 
                     try serializeValue(
                         writer,
-                        @field(value.@"struct", fieldName),
+                        @field(value.@"struct", field_name),
                         endian,
                     );
                 }
@@ -228,10 +231,10 @@ fn serializeValueInner(
                 const TagType = info.tag_type.?;
                 const tag: TagType = @backingInt(value);
 
-                inline for (info.field_names, info.field_types) |fieldName, FieldType| {
-                    const fieldTag = @field(TagType, fieldName);
+                inline for (info.field_names, info.field_types) |field_name, FieldType| {
+                    const field_tag = @field(TagType, field_name);
 
-                    if (fieldTag == tag) {
+                    if (field_tag == tag) {
                         // Signatures don't require alignment 'cause they start from a byte
                         try serializeSignature(
                             writer,
@@ -241,7 +244,7 @@ fn serializeValueInner(
                         try alignValue(writer, FieldType, pos);
                         try serializeValue(
                             writer,
-                            @field(value, fieldName),
+                            @field(value, field_name),
                             endian,
                         );
                     }
@@ -265,12 +268,12 @@ inline fn serializeSignature(writer: *Io.Writer, signature: types.Signature) Io.
 pub inline fn alignValue(writer: *Io.Writer, comptime T: type, pos: usize) Io.Writer.Error!void {
     // TODO: Use something more efficient than a loop with `writeByte`
 
-    const paddingBytes = getAlignmentPadding(
+    const padding_bytes = getAlignmentPadding(
         pos,
         @field(T, "ALIGNMENT"),
     );
 
-    for (0..paddingBytes) |_|
+    for (0..padding_bytes) |_|
         try writer.writeByte(0);
 }
 
