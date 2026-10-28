@@ -13,7 +13,6 @@ const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
 const lang = std.lang;
-const Type = lang.Type;
 
 /// Value is taken from the spec:
 ///
@@ -32,6 +31,8 @@ pub fn Num(comptime T: type) type {
     if (T != u8 and T != u16 and T != u32 and T != u64 and
         T != i16 and T != i32 and T != i64 and
         T != f64) @compileError("Invalid number type");
+
+    // TODO: __ZBUS prefix in alignment
 
     return struct {
         num: T,
@@ -118,7 +119,7 @@ pub const Signature = struct {
 /// It is guaranteed that fields of the struct will
 /// be serialized in the order of their definition in code.
 pub fn Struct(comptime T: type) type {
-    const info: Type.Struct = @typeInfo(T).@"struct";
+    const info = @typeInfo(T).@"struct";
     inline for (info.field_types) |FieldType|
         if (!isType(FieldType)) @compileError("Struct type must have only D-Bus types in fields");
 
@@ -169,8 +170,6 @@ pub inline fn isArray(comptime T: type) bool {
 /// Dict entries must only be array elements, and if
 /// one isn't in an array, serialization fails at comptime.
 pub fn DictEntry(comptime K: type, comptime V: type) type {
-    // TODO:
-
     if (K != Str and K != ObjectPath and K != Signature and
         K != Bool and K != UnixFd and !isNum(K)) @compileError("Invalid key type `K`");
 
@@ -210,7 +209,7 @@ pub inline fn isDictEntry(comptime T: type) bool {
 /// doSomething(IntOrStr.variant.int);
 /// ```
 pub fn Variant(comptime U: type) type {
-    const info: Type.Union = @typeInfo(U).@"union";
+    const info = @typeInfo(U).@"union";
 
     if (info.tag_type == null) @compileError("Union of Variant must be tagged");
 
@@ -285,6 +284,7 @@ pub fn VariantArrayEntry(key: anytype, comptime V: type) type {
     return struct {
         value: V,
 
+        // TODO: __ZBUS prefix
         pub const KEY = key;
 
         pub const __IS_ZBUS_STATIC_VARIANT_ARRAY_ENTRY__ = true;
@@ -358,7 +358,7 @@ fn signatureFromTypeInner(
                     else => @compileError("Invalid number type"),
                 };
             if (isStruct(T)) {
-                const info: Type.Struct = @typeInfo(@FieldType(T, "struct")).@"struct";
+                const info = @typeInfo(@FieldType(T, "struct")).@"struct";
 
                 const nextStructDepth = structDepth + 1;
 
@@ -401,7 +401,7 @@ fn signatureFromTypeInner(
                 return "{" ++ keySignature ++ valueSignature ++ "}";
             }
             if (isArray(T)) {
-                const info: Type.Pointer = @typeInfo(@FieldType(T, "array")).pointer;
+                const info = @typeInfo(@FieldType(T, "array")).pointer;
 
                 const nextArrayDepth = arrayDepth + 1;
 
@@ -420,4 +420,20 @@ fn signatureFromTypeInner(
             @compileError("Unknown type `T`");
         },
     };
+}
+
+/// Returns alignment of `T` defined in the D-Bus spec.
+pub fn getTypeAlignment(comptime T: type) comptime_int {
+    return @field(T, "ALGINMENT");
+}
+
+/// Returns the amount of bytes that `addr` is missing to be aligned forward.
+pub inline fn getAlignmentPadding(addr: usize, comptime alignment: u64) usize {
+    // It's faster than `mem.alignForward(addr) - addr`
+
+    // It's the same as `alignment - (addr % alignment)`.
+    // For `addr = 11` and `alignment = 8`:
+    // 8 - (11 % 8) = 8 - 3 = 5
+    // 11 + 5 = 16 -> Correct alignment
+    return -addr & comptime (alignment - 1);
 }

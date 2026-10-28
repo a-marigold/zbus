@@ -268,22 +268,9 @@ inline fn serializeSignature(writer: *Io.Writer, signature: types.Signature) Io.
 pub inline fn alignValue(writer: *Io.Writer, comptime T: type, pos: usize) Io.Writer.Error!void {
     // TODO: Use something more efficient than a loop with `writeByte`
 
-    const padding_bytes = getAlignmentPadding(
-        pos,
-        @field(T, "ALIGNMENT"),
-    );
+    const padding_bytes =
+        types.getAlignmentPadding(pos, types.getTypeAlignment(T));
 
     for (0..padding_bytes) |_|
         try writer.writeByte(0);
-}
-
-/// Returns the amount of bytes that `addr` is missing to be aligned forward.
-pub inline fn getAlignmentPadding(addr: usize, comptime alignment: u64) usize {
-    // It's faster than `mem.alignForward(addr) - addr`
-
-    // It's the same as `alignment - (addr % alignment)`.
-    // For `addr = 11` and `alignment = 8`:
-    // 8 - (11 % 8) = 8 - 3 = 5
-    // 11 + 5 = 16 -> Correct alignment
-    return -addr & (alignment - 1);
 }
