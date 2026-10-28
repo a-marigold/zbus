@@ -29,7 +29,6 @@ pub const Header = struct {
     /// - Sizes of arrays
     endian: lang.Endian,
 
-    /// Type of the message.
     messageType: MessageType,
 
     /// `0` means no flag is selected.
@@ -37,10 +36,7 @@ pub const Header = struct {
     /// See `Header.Flags`.
     flags: u8,
 
-    /// The major D-Bus protocol version.
-    version: u8, // TODO: rename to `protocolVersion`
-
-    bodySize: BodySize,
+    bodyLen: u32,
 
     /// Serial number of the message.
     serial: u32,
@@ -48,31 +44,25 @@ pub const Header = struct {
     fields: Fields,
 
     /// Despite that header fields in the spec are in
-    /// array of variants, here it's a struct for performance.
+    /// array of variants, here it's a static `VariantArray` for performance.
     ///
     /// Values are nullable 'cause required fields depend on the message type.
     ///
     /// Codes of fields are taken from https://dbus.freedesktop.org/doc/dbus-specification.html#message-protocol-messages.
     pub const Fields = types.VariantArray(struct {
-        objectPath: types.VariantArrayEntry(1, types.ObjectPath),
-        interface: types.VariantArrayEntry(2, types.Str),
-        method: types.VariantArrayEntry(3, types.Str),
-        errorName: types.VariantArrayEntry(4, types.Str),
+        objectPath: types.VariantArrayEntry(1, ?types.ObjectPath),
+        interface: types.VariantArrayEntry(2, ?types.Str),
+        method: types.VariantArrayEntry(3, ?types.Str),
+        errorName: types.VariantArrayEntry(4, ?types.Str),
 
         /// Serial number of the message this message is a reply to.
-        replySerial: types.VariantArrayEntry(5, ?u32),
-        destination: types.VariantArrayEntry(6, types.Str),
-        sender: types.VariantArrayEntry(7, types.Str),
-        bodySignature: types.VariantArrayEntry(8, BodySignature), // TODO
-        unixFds: types.VariantArrayEntry(9, ?u32),
+        replySerial: types.VariantArrayEntry(5, ?types.Num(u32)),
 
-        pub const BodySignature = struct {
-            comptime isAuto: true = true,
-            signature: [:0]const u8,
+        destination: types.VariantArrayEntry(6, ?types.Str),
+        sender: types.VariantArrayEntry(7, ?types.Str),
 
-            /// Compute the signature during serialization.
-            pub const AUTO: @This() = .{ .isAuto = true, .signature = &.{} };
-        };
+        bodySignature: types.VariantArrayEntry(8, ?types.Signature),
+        unixFds: types.VariantArrayEntry(9, ?types.Num(u32)),
     });
 
     pub const MessageType = enum(u8) {
@@ -86,27 +76,9 @@ pub const Header = struct {
         pub const NO_AUTO_START = 0x2;
         pub const ALLOW_INTERACTIVE_AUTH = 0x4;
     };
-    pub const BodySize = struct {
-        comptime isAuto: true = true,
-        size: u32,
-
-        /// Compute the length during serialization
-        pub const AUTO = .{ .isAuto = true, .size = 0 };
-    };
 };
 
-/// Mustn't be called without calling `validateSignature` first.
-///
-/// - UTF-8 in strings isn't validated.
-/// - Object paths' structure isn't validated.
-///
-/// If `T` isn't a D-Bus type, a compile error is shown.
-pub fn parseValue(input: []const u8, comptime T: type, endian: lang.Endian) ParseValueError!T {
-    const parsedValue = try parseValueInner(input, T, endian);
-    return parsedValue.value;
-}
-
-const ParseValueError = error{
+pub const ParseValueError = error{
     /// The input ended too early so the data is interrupted
     UnexpectedEnd,
 
@@ -114,6 +86,20 @@ const ParseValueError = error{
     InvalidStrLen,
     VariantTypeMismatch,
 };
+/// Must not be called without calling `validateSignature` first.
+///
+/// - UTF-8 in string-like values isn't validated.
+/// - Contents of `ObjectPath` and `Signature` isn't validated.
+/// - Alignment padding bytes aren't validated. If `input` contains garbage instead of zeros
+///   in padding bytes between values, this function doesn't report out.
+///   Garbage in padding doesn't break anything, but the spec says it's an error.
+///
+/// If `T` isn't a D-Bus type, a compile error is shown.
+pub fn parseValue(input: []const u8, comptime T: type, endian: lang.Endian) ParseValueError!T {
+    const parsedValue = try parseValueInner(input, T, endian);
+    return parsedValue.value;
+}
+
 fn ParseValueResult(comptime T: type) type {
     return struct {
         /// The parsed value.
@@ -287,7 +273,6 @@ fn parseValueInner(
         },
     }
 }
-
 /// `StrLenType` is the type of length integer of a string-like value.
 ///
 /// It's needed 'cause lengths of `Str` and `ObjectPath`
