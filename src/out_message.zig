@@ -6,6 +6,7 @@ const Io = std.Io;
 const lang = std.lang;
 const builtin = @import("builtin");
 const types = @import("types.zig");
+const message_types = @import("message_types.zig");
 
 const ENDIAN = builtin.target.cpu.arch.endian();
 
@@ -18,7 +19,7 @@ const ENDIAN = builtin.target.cpu.arch.endian();
 pub const PROTOCOL_VERSION = 1;
 
 /// If the message doesn't need a body, `Body` can be `null`.
-pub fn OutMessage(comptime message_type: Header.MessageType, comptime Body: ?type) type {
+pub fn OutMessage(comptime message_type: message_types.MessageType, comptime Body: ?type) type {
     return struct {
         header: Header,
         body: if (Body) |BodyType| BodyType else @TypeOf(null),
@@ -60,11 +61,11 @@ pub fn OutMessage(comptime message_type: Header.MessageType, comptime Body: ?typ
 /// Instead, some fields are computed automatically during serialization.
 pub const Header = struct {
     /// Type of the message.
-    message_type: MessageType,
+    message_type: message_types.MessageType,
 
     /// `0` means no flag is selected.
     ///
-    /// See `Header.Flags`.
+    /// See `message_types.MessageType`.
     flags: u8,
 
     /// Serial number of the message.
@@ -91,20 +92,6 @@ pub const Header = struct {
         sender: types.VariantArrayEntry(7, types.Str),
         unix_fds: types.VariantArrayEntry(9, ?types.Num(u32)),
     });
-
-    // TODO: It's dublicated with `InMessage`
-    pub const MessageType = enum(u8) {
-        MethodCall = 1,
-        MethodReturn = 2,
-        Error = 3,
-        Signal = 4,
-    };
-
-    pub const Flags = struct {
-        pub const NO_REPLY_EXPECTED = 0x1;
-        pub const NO_AUTO_START = 0x2;
-        pub const ALLOW_INTERACTIVE_AUTH = 0x4;
-    };
 };
 
 /// Recursively (for containers) serializes `value` and writes the result to `writer`.
@@ -170,10 +157,10 @@ fn serializeValueInner(
             if (types.isStruct(T)) {
                 const info = @typeInfo(T).@"struct";
 
-                // Align the struct
+                // Align `Struct`
                 try alignValue(writer, T, pos);
 
-                // The first value is already aligned by the struct alignment
+                // The first field is already aligned by the `Struct` alignment
                 try serializeValue(
                     writer,
                     @field(value.@"struct", info.field_names[0]),
@@ -193,10 +180,10 @@ fn serializeValueInner(
             }
 
             if (types.isDictEntry(T)) {
-                // Align the dict entry
+                // Align `DictEntry`
                 try alignValue(writer, T, pos);
 
-                // Key is already aligned by the dict entry alignment
+                // Key is already aligned by the `DictEntry` alignment
                 try serializeValue(
                     writer,
                     value.key,
@@ -212,10 +199,10 @@ fn serializeValueInner(
                 return;
             }
             if (types.isArray(T)) {
-                // Align the array
+                // Align `Array`
                 try alignValue(writer, T, pos);
 
-                // The first el is already aligned by the array alignment
+                // The first el is already aligned by the `Array` alignment
                 try serializeValue(writer, value[0], endian);
 
                 const ElType = @typeInfo(T).pointer.child;
@@ -264,6 +251,8 @@ inline fn serializeSignature(writer: *Io.Writer, signature: types.Signature) Io.
 /// Writes required amount of alignment padding bytes to `writer` so
 /// a value of type `T` is aligned if written afterwards.
 ///
+/// Padding bytes are zeros in accordance with the spec.
+///
 /// `pos` is the number of totally written bytes to `writer`.
 pub inline fn alignValue(writer: *Io.Writer, comptime T: type, pos: usize) Io.Writer.Error!void {
     // TODO: Use something more efficient than a loop with `writeByte`
@@ -271,6 +260,5 @@ pub inline fn alignValue(writer: *Io.Writer, comptime T: type, pos: usize) Io.Wr
     const padding_bytes =
         types.getAlignmentPadding(pos, types.getTypeAlignment(T));
 
-    for (0..padding_bytes) |_|
-        try writer.writeByte(0);
+    for (0..padding_bytes) |_| try writer.writeByte(0);
 }

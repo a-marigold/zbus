@@ -10,6 +10,7 @@ const mem = std.mem;
 const Io = std.Io;
 const lang = std.lang;
 const types = @import("types.zig");
+const message_types = @import("message_types.zig");
 
 header: Header,
 body: []const u8,
@@ -27,11 +28,11 @@ pub const Header = struct {
     /// - Sizes of arrays
     endian: lang.Endian,
 
-    message_type: MessageType,
+    message_type: message_types.MessageType,
 
     /// `0` means no flag is selected.
     ///
-    /// See `Header.Flags`.
+    /// See `message_types.MessageFlags`.
     flags: u8,
 
     body_len: u32,
@@ -62,18 +63,6 @@ pub const Header = struct {
         body_signature: types.VariantArrayEntry(8, ?types.Signature),
         unix_fds: types.VariantArrayEntry(9, ?types.Num(u32)),
     });
-
-    pub const MessageType = enum(u8) {
-        MethodCall = 1,
-        MethodReturn = 2,
-        Error = 3,
-        Signal = 4,
-    };
-    pub const Flags = struct {
-        pub const NO_REPLY_EXPECTED = 0x1;
-        pub const NO_AUTO_START = 0x2;
-        pub const ALLOW_INTERACTIVE_AUTH = 0x4;
-    };
 };
 
 pub const ParseValueError = error{
@@ -87,7 +76,7 @@ pub const ParseValueError = error{
 ///
 /// - UTF-8 in string-like values isn't validated.
 /// - Contents of `ObjectPath` and `Signature` isn't validated.
-/// - Alignment padding bytes aren't validated. If `input` contains garbage instead of zeros
+/// - Alignment padding bytes aren't validated. If `input` contains a garbage instead of zeros
 ///   in padding bytes between values, this function doesn't report out.
 ///   Garbage in padding doesn't break anything, but the spec says it's an error.
 ///
@@ -361,12 +350,15 @@ inline fn parseStrLike(
 const AlignInputError = error{UnexpectedEnd};
 /// Returns a slice of `input`, where `ptr`
 /// is aligned forward by alignment of type `V`.
+///
+/// Value can be safely read with correct alignment from `aligned_input[0..]`
+/// (of course with bounds checking).
 inline fn alignInput(input: []const u8, comptime V: type) AlignInputError![]const u8 {
-    const value_start = types.getAlignmentPadding(
+    const padding_len = types.getAlignmentPadding(
         input.ptr,
         types.getTypeAlignment(V),
     );
 
-    if (value_start > input.len) return AlignInputError.UnexpectedEnd;
-    return input[value_start..];
+    if (padding_len > input.len) return AlignInputError.UnexpectedEnd;
+    return input[padding_len..];
 }
