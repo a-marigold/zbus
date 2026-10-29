@@ -1,7 +1,5 @@
 //! Incoming (unsolicited) message.
 
-// TODO: consider `unsupported endian` error
-
 // TODO:
 // Store a fixed array containing slices of arrays in input and quantity of their elements
 // (expected amount of arrays in the whole message is known at compile time)
@@ -13,12 +11,12 @@ const Io = std.Io;
 const lang = std.lang;
 const types = @import("types.zig");
 
-const Type = std.lang.Type;
-
 header: Header,
 body: []const u8,
 
 pub const Header = struct {
+    // TODO: consider `unsupported endian` error
+
     /// Endianness of bytes in the header and the body.
     ///
     /// For outcoming messages, it is recommended to use the native endian.
@@ -83,9 +81,8 @@ pub const ParseValueError = error{
     UnexpectedEnd,
 
     InvalidValue,
-    InvalidStrLen,
     VariantTypeMismatch,
-};
+} || ParseStrError || AlignInputError;
 /// Must not be called without calling `validateSignature` first.
 ///
 /// - UTF-8 in string-like values isn't validated.
@@ -96,8 +93,8 @@ pub const ParseValueError = error{
 ///
 /// If `T` isn't a D-Bus type, a compile error is shown.
 pub fn parseValue(input: []const u8, comptime T: type, endian: lang.Endian) ParseValueError!T {
-    const parsedValue = try parseValueInner(input, T, endian);
-    return parsedValue.value;
+    const parsed_value = try parseValueInner(input, T, endian);
+    return parsed_value.value;
 }
 
 fn ParseValueResult(comptime T: type) type {
@@ -105,11 +102,14 @@ fn ParseValueResult(comptime T: type) type {
         /// The parsed value.
         value: T,
         /// The amount of `input` bytes that were read to parse the value.
+        /// Includes padding bytes of value alignment.
         ///
         /// It's always less than or equal `input.len`.
         size: u64,
     };
 }
+
+// TODO: size should include padding
 
 fn parseValueInner(
     input: []const u8,
@@ -118,56 +118,67 @@ fn parseValueInner(
 ) ParseValueError!ParseValueResult(T) {
     switch (T) {
         types.Bool => {
+            const aligned_input = try alignInput(input, T);
+
             // `Bool` is encoded in `u32`
-            const boolSize = @sizeOf(u32);
+            const bool_size = @sizeOf(u32);
 
-            if (input.len < boolSize) return ParseValueError.UnexpectedEnd;
+            if (aligned_input.len < bool_size) return ParseValueError.UnexpectedEnd;
 
-            const @"bool" = switch (mem.readInt(u32, input[0..boolSize], endian)) {
+            const @"bool" = switch (mem.readInt(u32, input[0..bool_size], endian)) {
                 0 => false,
                 1 => true,
                 else => return ParseValueError.InvalidValue,
             };
 
-            return .{ .value = @"bool", .size = boolSize };
+            return .{ .value = @"bool", .size = bool_size };
         },
         types.UnixFd => {
+            const aligned_input = try alignInput(input, T);
+
             const FdType = @FieldType(T, "index");
-            const fdSize = @sizeOf(FdType);
+            const fd_size = @sizeOf(FdType);
 
-            if (input.len < fdSize) return ParseValueError.UnexpectedEnd;
+            if (aligned_input.len < fd_size) return ParseValueError.UnexpectedEnd;
 
-            const fd = mem.readInt(FdType, input[0..fdSize], endian);
+            const fd = mem.readInt(FdType, input[0..fd_size], endian);
 
             return .{
                 .value = .{ .fd = fd },
-                .size = fdSize,
+                .size = fd_size,
             };
         },
         types.Str, types.ObjectPath => {
+            const aligned_input = try alignInput(input, T);
+
             // Lengths of `Str` and `ObjectPath` are encoded in `u32`
-            const parsedStr = try parseStrLike(input, u32, endian);
+            const parsed_str =
+                try parseStrLike(aligned_input, u32, endian);
 
             return .{
-                .value = @ptrCast(parsedStr.value),
-                .size = parsedStr.size,
+                .value = @ptrCast(parsed_str.value),
+                .size = parsed_str.size,
             };
         },
         types.Signature => {
-            // Length of `Signature` is encoded in `u8`
-            const signature = try parseStrLike(input, u8, endian);
+            // Length of `Signature` is encoded in `u8`,
+            // so it doesn't require alignment
+            const parsed_signature =
+                try parseStrLike(input, u8, endian);
 
             return .{
-                .value = @ptrCast(signature.value),
-                .size = signature.size,
+                .value = .{ .signature = parsed_signature.value },
+                .size = parsed_signature.size,
             };
         },
         else => {
             if (types.isNum(T)) {
+                const aligned_input = try alignInput(input, T);
+
                 const NumType = @FieldType(T, "num");
                 const num = mem.readInt(
                     NumType,
-                    input[0..@sizeOf(NumType)],
+                    aligned_input[0..@sizeOf(NumType)],
                     endian,
                 );
 
@@ -178,78 +189,110 @@ fn parseValueInner(
             }
             if (types.isStruct(T)) {
                 const StructType = @FieldType(T, "struct");
-                const info: Type.Struct = @typeInfo(StructType).@"struct";
+                const info = @typeInfo(StructType).@"struct";
 
                 var @"struct": StructType = undefined;
 
-                var remainingInput = input;
-                inline for (info.field_names, info.field_types) |fieldName, FieldType| {
-                    const parsedField = try parseValueInner(
-                        remainingInput,
+                // Alignment of `Struct`
+                var remaining_input = try alignInput(input, T);
+
+                {
+                    // Alignment of the first field is already handled above
+                    const field_name = info.field_names[0];
+                    const FieldType = info.field_types[0];
+
+                    const parsed_field = try parseValueInner(
+                        remaining_input,
                         FieldType,
                         endian,
                     );
 
-                    @field(@"struct", fieldName) = parsedField.value;
+                    @field(@"struct", field_name) = parsed_field.value;
 
-                    remainingInput = remainingInput[0..parsedField.size];
+                    remaining_input = remaining_input[0..parsed_field.size];
+                }
+
+                inline for (info.field_names[1..], info.field_types[1..]) |field_name, FieldType| {
+                    remaining_input = try alignInput(input, FieldType);
+
+                    const parsed_field = try parseValueInner(
+                        remaining_input,
+                        FieldType,
+                        endian,
+                    );
+
+                    @field(@"struct", field_name) = parsed_field.value;
+
+                    remaining_input = remaining_input[parsed_field.size..];
                 }
 
                 return .{
                     .value = .{ .@"struct" = @"struct" },
-                    .size = @intFromPtr(remainingInput.ptr) - @intFromPtr(input.ptr),
+                    .size = @intFromPtr(remaining_input.ptr) - @intFromPtr(input.ptr),
                 };
             }
             if (types.isDictEntry(T)) {
-                const parsedKey = try parseValueInner(
-                    input,
+                // Alignment of `DictEntry`
+                const aligned_input = try alignInput(input, T);
+
+                // Alignment of is already handled above
+                const parsed_key = try parseValueInner(
+                    aligned_input,
                     @FieldType(T, "key"),
                     endian,
                 );
-                const parsedValue = try parseValueInner(
-                    input[parsedKey.size..],
+
+                const remaining_input =
+                    try alignInput(aligned_input[parsed_key.size..], T);
+
+                const parsed_value = try parseValueInner(
+                    remaining_input,
                     @FieldType(T, "value"),
                     endian,
                 );
 
                 return .{
                     .value = .{
-                        .key = parsedKey.value,
-                        .value = parsedValue.value,
+                        .key = parsed_key.value,
+                        .value = parsed_value.value,
                     },
-                    .size = parsedKey.size + parsedValue.size,
+                    .size = parsed_key.size + parsed_value.size,
                 };
             }
             if (types.isVariant(T)) {
                 const UnionType = @FieldType(T, "variant");
-                const info: Type.Union = @typeInfo(UnionType).@"union";
+                const info = @typeInfo(UnionType).@"union";
 
-                const fieldSignatures = block: {
+                const field_signatures = comptime block: {
                     var signatures: [info.field_types.len][:0]const u8 = undefined;
-                    inline for (info.field_types, &signatures) |FieldType, signature|
+                    for (info.field_types, &signatures) |FieldType, signature|
                         signature.* = types.signatureFromType(FieldType);
 
                     break :block signatures;
                 };
 
-                // `Variant` is encoded as a signature
-                // of the variant value, followed by that value
-                const parsedSignature = try parseStrLike(
+                // `Variant` is encoded as `Signature` of
+                // the variant value, followed by that value
+
+                // `Signature` doesn't require alignment
+                const parsed_signature = try parseStrLike(
                     input,
                     u8,
                     endian,
                 );
 
-                const remainingInput = input[parsedSignature.size..];
+                const remaining_input = input[parsed_signature.size..];
 
                 inline for (
                     info.field_names,
                     info.field_types,
-                    fieldSignatures,
-                ) |fieldName, FieldType, fieldSignature|
-                    if (mem.eql(u8, parsedSignature.value, fieldSignature)) {
-                        const parsedValue = try parseValueInner(
-                            remainingInput,
+                    field_signatures,
+                ) |field_name, FieldType, field_signature|
+                    if (mem.eql(u8, parsed_signature.value, field_signature)) {
+                        const aligned_remaining_input = try alignInput(remaining_input, FieldType);
+
+                        const parsed_field = try parseValueInner(
+                            aligned_remaining_input,
                             FieldType,
                             endian,
                         );
@@ -258,11 +301,11 @@ fn parseValueInner(
                             .value = .{
                                 .variant = @unionInit(
                                     UnionType,
-                                    fieldName,
-                                    parsedValue.value,
+                                    field_name,
+                                    parsed_field.value,
                                 ),
                             },
-                            .size = parsedSignature.size + parsedValue.size,
+                            .size = parsed_signature.size + parsed_field.size,
                         };
                     };
 
@@ -273,40 +316,57 @@ fn parseValueInner(
         },
     }
 }
+
+const ParseStrError = error{ UnexpectedEnd, InvalidValue, TooLongStr };
 /// `StrLenType` is the type of length integer of a string-like value.
 ///
 /// It's needed 'cause lengths of `Str` and `ObjectPath`
 /// are `u32`, but length of `Signature` is `u8`.
+///
+/// Alignment of `input` must be already handled.
 inline fn parseStrLike(
-    input: []const u8,
+    aligned_input: []const u8,
     comptime StrLenType: type,
     endian: lang.Endian,
-) ParseValueError!ParseValueResult([:0]const u8) {
-    const strLenSize = @sizeOf(StrLenType);
-    const nullTerminatorLen = 1;
+) ParseStrError!ParseValueResult([:0]const u8) {
+    const str_len_size = @sizeOf(StrLenType);
+    const null_terminator_len = 1;
 
-    const minStrSize = strLenSize + nullTerminatorLen;
-    if (input.len < minStrSize) return ParseValueError.UnexpectedEnd;
+    const min_str_size = str_len_size + null_terminator_len;
+    if (min_str_size > aligned_input.len) return ParseStrError.UnexpectedEnd;
 
-    const fullStrLen = mem.readInt(
+    const full_str_len = mem.readInt(
         StrLenType,
-        input[0..strLenSize],
+        aligned_input[0..str_len_size],
         endian,
-    ) + nullTerminatorLen;
-    const strStart = strLenSize;
+    ) + null_terminator_len;
+    const str_start = str_len_size;
 
-    const remainingInput = input[strStart..];
-    if (remainingInput.len < fullStrLen) return ParseValueError.UnexpectedEnd;
+    const remaining_input = aligned_input[str_start..];
+    if (full_str_len > remaining_input.len) return ParseStrError.TooLongStr;
 
-    const fullStr = remainingInput[0..fullStrLen];
+    const full_str = remaining_input[0..full_str_len];
 
     // Check null terminator
-    if (fullStr[fullStr.len - 1] != 0) return ParseValueError.InvalidValue;
+    if (full_str[full_str.len - 1] != 0) return ParseStrError.InvalidValue;
 
-    const str = fullStr[0 .. fullStr.len - nullTerminatorLen :0];
+    const str = full_str[0 .. full_str.len - null_terminator_len :0];
 
     return .{
         .value = str,
-        .size = strLenSize + fullStr.len,
+        .size = str_len_size + full_str.len,
     };
+}
+
+const AlignInputError = error{UnexpectedEnd};
+/// Returns a slice of `input`, where `ptr`
+/// is aligned forward by alignment of type `V`.
+inline fn alignInput(input: []const u8, comptime V: type) AlignInputError![]const u8 {
+    const value_start = types.getAlignmentPadding(
+        input.ptr,
+        types.getTypeAlignment(V),
+    );
+
+    if (value_start > input.len) return AlignInputError.UnexpectedEnd;
+    return input[value_start..];
 }
