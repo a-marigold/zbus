@@ -191,9 +191,13 @@ pub inline fn isDictEntry(comptime T: type) bool {
     return @hasField(T, "__IS_ZBUS_DICT_ENTRY__");
 }
 
-/// Creates a Variant D-Bus type representation.
+/// `U` is a union of D-Bus types.
 ///
-/// `T` is a union-type of the Variant.
+/// In D-Bus, variants can contain any other
+/// D-Bus type, including another `Variant`.
+/// But usually variants are limited by only several types.
+/// If the original D-Bus approach of variants is needed,
+/// `U` can just contain all the D-Bus types found in this file.
 ///
 /// Unions without tags (bare unions) aren't allowed.
 ///
@@ -423,6 +427,19 @@ fn signatureFromTypeInner(
 }
 
 /// Returns alignment of `T` defined in the D-Bus spec.
+///
+/// It's always a power of two.
 pub fn getTypeAlignment(comptime T: type) comptime_int {
     return @field(T, "ALGINMENT");
+}
+
+/// Returns the amount of bytes that `addr` is missing to be aligned forward.
+pub inline fn getAlignmentPadding(addr: usize, comptime alignment: u64) usize {
+    // It's faster than `mem.alignForward(addr) - addr`
+
+    // It's the same as `alignment - (addr % alignment)`.
+    // For `addr = 11` and `alignment = 8`:
+    // 8 - (11 % 8) = 8 - 3 = 5
+    // 11 + 5 = 16 -> Correct alignment
+    return -addr & comptime (alignment - 1);
 }
