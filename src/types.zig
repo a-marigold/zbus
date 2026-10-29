@@ -32,14 +32,12 @@ pub fn Num(comptime T: type) type {
         T != i16 and T != i32 and T != i64 and
         T != f64) @compileError("Invalid number type");
 
-    // TODO: __ZBUS prefix in alignment
-
     return struct {
         num: T,
 
         pub const __IS_ZBUS_NUM__ = true;
 
-        pub const ALIGNMENT = switch (T) {
+        pub const __ZBUS_ALIGNMENT__ = switch (T) {
             u8 => 1,
             u16, i16 => 2,
             u32, i32 => 4,
@@ -61,7 +59,7 @@ pub const Bool = struct {
 
     // `Bool` is encoded as `u32`,
     // so the alignment is 4
-    pub const ALIGNMENT = 4;
+    pub const __ZBUS_ALIGNMENT__ = 4;
 
     pub inline fn init(@"bool": bool) @This() {
         return .{ .bool = @"bool" };
@@ -73,7 +71,7 @@ pub const Bool = struct {
 pub const UnixFd = struct {
     index: u32,
 
-    pub const ALIGNMENT = 4;
+    pub const __ZBUS_ALIGNMENT__ = 4;
 
     pub inline fn init(index: u32) @This() {
         return .{ .index = index };
@@ -85,7 +83,7 @@ pub const Str = struct {
 
     // Length of `Str` is encoded
     // as `u32`, so the alignment is 4
-    pub const ALIGNMENT = 4;
+    pub const __ZBUS_ALIGNMENT__ = 4;
 
     pub inline fn init(str: [:0]const u8) @This() {
         return .{ .str = str };
@@ -97,7 +95,7 @@ pub const ObjectPath = struct {
 
     // Length of `ObjectPath` is encoded
     // as `u32`, so the alignment is 4
-    pub const ALIGNMENT = 4;
+    pub const __ZBUS_ALIGNMENT__ = 4;
 
     pub inline fn init(path: [:0]const u8) @This() {
         return .{ .path = path };
@@ -128,7 +126,7 @@ pub fn Struct(comptime T: type) type {
 
         pub const __IS_ZBUS_STRUCT__ = true;
 
-        pub const ALIGNMENT = 8;
+        pub const __ZBUS_ALIGNMENT__ = 8;
 
         pub inline fn init(@"struct": T) @This() {
             return .{ .@"struct" = @"struct" };
@@ -151,7 +149,7 @@ pub fn Array(comptime E: type) type {
         // Length of `Array` is encoded as `u32`,
         // so the alignment is 4.
         // Alignment of elements is handled independently
-        pub const ALIGNMENT = 4;
+        pub const __ZBUS_ALIGNMENT__ = 4;
 
         pub inline fn init(array: []const E) @This() {
             return .{ .array = array };
@@ -180,7 +178,7 @@ pub fn DictEntry(comptime K: type, comptime V: type) type {
 
         pub const __IS_ZBUS_DICT_ENTRY__ = true;
 
-        pub const ALIGNMENT = 8;
+        pub const __ZBUS_ALIGNMENT__ = 8;
 
         pub inline fn init(key: K, value: V) @This() {
             return .{ .entry = .{ .key = key, .value = value } };
@@ -272,7 +270,7 @@ pub fn VariantArray(comptime T: type) type {
         // Length of `Array` is encoded as `u32`,
         // so the alignment is 4.
         // Alignment of elements is handled independently
-        pub const ALIGNMENT = 4;
+        pub const __ZBUS_ALIGNMENT__ = 4;
 
         pub inline fn init(@"struct": T) @This() {
             return .{ .@"struct" = @"struct" };
