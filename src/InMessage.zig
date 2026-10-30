@@ -137,29 +137,7 @@ fn parseValueInner(
                 .size = fd_size,
             };
         },
-        types.Str, types.ObjectPath => {
-            const aligned_input = try alignInput(input, T);
-
-            // Lengths of `Str` and `ObjectPath` are encoded in `u32`
-            const parsed_str =
-                try parseStrLike(aligned_input, u32, endian);
-
-            return .{
-                .value = @ptrCast(parsed_str.value),
-                .size = parsed_str.size,
-            };
-        },
-        types.Signature => {
-            // Length of `Signature` is encoded in `u8`,
-            // so it doesn't require alignment
-            const parsed_signature =
-                try parseStrLike(input, u8, endian);
-
-            return .{
-                .value = .{ .signature = parsed_signature.value },
-                .size = parsed_signature.size,
-            };
-        },
+        types.Str, types.ObjectPath, types.Signature => return parseStrLike(input, T, endian),
         else => {
             if (types.isNum(T)) {
                 const aligned_input = try alignInput(input, T);
@@ -263,12 +241,8 @@ fn parseValueInner(
                 // `Variant` is encoded as `Signature` of
                 // the variant value, followed by that value
 
-                // `Signature` doesn't require alignment
-                const parsed_signature = try parseStrLike(
-                    input,
-                    u8,
-                    endian,
-                );
+                const parsed_signature =
+                    try parseStrLike(input, types.Signature, endian);
 
                 const remaining_input = input[parsed_signature.size..];
 
@@ -306,32 +280,46 @@ fn parseValueInner(
     }
 }
 
-const ParseStrError = error{ UnexpectedEnd, InvalidValue, TooLongStr };
-/// `StrLenType` is the type of length integer of a string-like value.
-///
-/// It's needed 'cause lengths of `Str` and `ObjectPath`
-/// are `u32`, but length of `Signature` is `u8`.
-///
-/// Alignment of `input` must be already handled.
+const ParseStrError = error{ UnexpectedEnd, InvalidValue, TooLongStr } || AlignInputError;
+/// Parses string-like type: `Str`, `ObjectPath` or `Signature`.
 inline fn parseStrLike(
-    aligned_input: []const u8,
-    comptime StrLenType: type,
+    input: []const u8,
+    comptime T: type,
     endian: lang.Endian,
-) ParseStrError!ParseValueResult([:0]const u8) {
+) ParseStrError!ParseValueResult(T) {
+    const aligned_input = switch (T) {
+        types.Str, types.ObjectPath => try alignInput(input, T),
+
+        // `Signature` doesn't require alignment handling
+        // 'cause it starts from `u8` (the length)
+        types.Signature => input,
+
+        else => @compileError("Unknown type `T`"),
+    };
+
+    const StrLenType = switch (T) {
+        types.Str, types.ObjectPath => u32,
+        types.Signature => u8,
+        else => unreachable,
+    };
+
     const str_len_size = @sizeOf(StrLenType);
     const null_terminator_len = 1;
 
     const min_str_size = str_len_size + null_terminator_len;
-    if (min_str_size > aligned_input.len) return ParseStrError.UnexpectedEnd;
+    if (min_str_size > input.len) return ParseStrError.UnexpectedEnd;
 
-    const full_str_len = mem.readInt(
-        StrLenType,
-        aligned_input[0..str_len_size],
-        endian,
-    ) + null_terminator_len;
-    const str_start = str_len_size;
+    const content_len: StrLenType = switch (str_len_size) {
+        1 => aligned_input[0],
+        else => mem.readInt(
+            StrLenType,
+            aligned_input[0..str_len_size],
+            endian,
+        ),
+    };
+    const full_str_len = content_len + null_terminator_len;
 
-    const remaining_input = aligned_input[str_start..];
+    const remaining_input = aligned_input[str_len_size..];
     if (full_str_len > remaining_input.len) return ParseStrError.TooLongStr;
 
     const full_str = remaining_input[0..full_str_len];
@@ -339,7 +327,7 @@ inline fn parseStrLike(
     // Check null terminator
     if (full_str[full_str.len - 1] != 0) return ParseStrError.InvalidValue;
 
-    const str = full_str[0 .. full_str.len - null_terminator_len :0];
+    const str = full_str[0..content_len :0];
 
     return .{
         .value = str,
@@ -354,10 +342,8 @@ const AlignInputError = error{UnexpectedEnd};
 /// Value can be safely read with correct alignment from `aligned_input[0..]`
 /// (of course with bounds checking).
 inline fn alignInput(input: []const u8, comptime V: type) AlignInputError![]const u8 {
-    const padding_len = types.getAlignmentPadding(
-        input.ptr,
-        types.getTypeAlignment(V),
-    );
+    const padding_len =
+        types.getAlignmentPadding(input.ptr, types.getTypeAlignment(V));
 
     if (padding_len > input.len) return AlignInputError.UnexpectedEnd;
     return input[padding_len..];
