@@ -138,78 +138,52 @@ fn serializeValueInner(
             try writer.writeAll(str);
         },
 
-        // Signatures don't require alignment 'cause they start from `u8` (the length)
-        types.Signature => try serializeSignature(writer, value),
+        types.Signature => {
+            // `Signature` doesn't require alignment 'cause it starts from `u8` (the length)
+
+            try writer.writeByte(value.signature.len);
+            try writer.writeAll(value.signature);
+        },
 
         else => {
             if (types.isNum(T)) {
-                if (@typeInfo(T).int.bits == 8) return writer.writeByte(value.num);
+                const NumType = @FieldType(T, "num");
+
+                if (NumType == u8) return writer.writeByte(value.num);
 
                 try alignValue(writer, T, pos);
 
-                return writer.writeInt(
-                    @FieldType(T, "num"),
-                    value.num,
-                    endian,
-                );
+                return writer.writeInt(NumType, value.num, endian);
             }
 
             if (types.isStruct(T)) {
-                const info = @typeInfo(T).@"struct";
+                const info = @typeInfo(@FieldType(T, "struct")).@"struct";
 
-                // Align `Struct`
                 try alignValue(writer, T, pos);
 
-                // The first field is already aligned by the `Struct` alignment
-                try serializeValue(
-                    writer,
-                    @field(value.@"struct", info.field_names[0]),
-                    endian,
-                );
-
-                inline for (info.field_names[1..]) |field_name| {
-                    try alignValue(writer, T, pos);
-
+                inline for (info.field_names) |field_name|
                     try serializeValue(
                         writer,
                         @field(value.@"struct", field_name),
                         endian,
                     );
-                }
+
                 return;
             }
 
             if (types.isDictEntry(T)) {
-                // Align `DictEntry`
                 try alignValue(writer, T, pos);
 
-                // Key is already aligned by the `DictEntry` alignment
-                try serializeValue(
-                    writer,
-                    value.key,
-                    endian,
-                );
+                try serializeValue(writer, value.key, endian);
+                try serializeValue(writer, value.value, endian);
 
-                try alignValue(writer, @FieldType(T, "value"), pos);
-                try serializeValue(
-                    writer,
-                    value.value,
-                    endian,
-                );
                 return;
             }
             if (types.isArray(T)) {
-                // Align `Array`
                 try alignValue(writer, T, pos);
 
-                // The first el is already aligned by the `Array` alignment
-                try serializeValue(writer, value[0], endian);
+                for (value.array) |el| try serializeValue(writer, el, endian);
 
-                const ElType = @typeInfo(T).pointer.child;
-                for (value.array[1..]) |el| {
-                    try alignValue(writer, ElType, endian);
-                    try serializeValue(writer, el, endian);
-                }
                 return;
             }
             if (types.isVariant(T)) {
@@ -222,13 +196,11 @@ fn serializeValueInner(
                     const field_tag = @field(TagType, field_name);
 
                     if (field_tag == tag) {
-                        // Signatures don't require alignment 'cause they start from a byte
-                        try serializeSignature(
+                        try serializeValue(
                             writer,
-                            comptime .init(types.signatureFromType(FieldType)),
+                            types.Signature.init(types.signatureFromType(FieldType)),
+                            endian,
                         );
-
-                        try alignValue(writer, FieldType, pos);
                         try serializeValue(
                             writer,
                             @field(value, field_name),
@@ -236,16 +208,13 @@ fn serializeValueInner(
                         );
                     }
                 }
+
                 return;
             }
 
             @compileError("Unknown type `T`");
         },
     }
-}
-inline fn serializeSignature(writer: *Io.Writer, signature: types.Signature) Io.Writer.Error!void {
-    try writer.writeByte(signature.signature.len);
-    try writer.writeAll(signature.signature);
 }
 
 /// Writes required amount of alignment padding bytes to `writer` so
@@ -254,11 +223,11 @@ inline fn serializeSignature(writer: *Io.Writer, signature: types.Signature) Io.
 /// Padding bytes are zeros in accordance with the spec.
 ///
 /// `pos` is the number of totally written bytes to `writer`.
-pub inline fn alignValue(writer: *Io.Writer, comptime T: type, pos: usize) Io.Writer.Error!void {
+inline fn alignValue(writer: *Io.Writer, comptime T: type, pos: usize) Io.Writer.Error!void {
     // TODO: Use something more efficient than a loop with `writeByte`
 
-    const padding_bytes =
+    const padding_len =
         types.getAlignmentPadding(pos, types.getTypeAlignment(T));
 
-    for (0..padding_bytes) |_| try writer.writeByte(0);
+    for (0..padding_len) |_| try writer.writeByte(0);
 }
