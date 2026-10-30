@@ -160,28 +160,9 @@ fn parseValueInner(
 
                 var @"struct": StructType = undefined;
 
-                // Alignment of `Struct`
                 var remaining_input = try alignInput(input, T);
 
-                {
-                    // Alignment of the first field is already handled above
-                    const field_name = info.field_names[0];
-                    const FieldType = info.field_types[0];
-
-                    const parsed_field = try parseValueInner(
-                        remaining_input,
-                        FieldType,
-                        endian,
-                    );
-
-                    @field(@"struct", field_name) = parsed_field.value;
-
-                    remaining_input = remaining_input[0..parsed_field.size];
-                }
-
-                inline for (info.field_names[1..], info.field_types[1..]) |field_name, FieldType| {
-                    remaining_input = try alignInput(input, FieldType);
-
+                inline for (info.field_names, info.field_types) |field_name, FieldType| {
                     const parsed_field = try parseValueInner(
                         remaining_input,
                         FieldType,
@@ -199,21 +180,15 @@ fn parseValueInner(
                 };
             }
             if (types.isDictEntry(T)) {
-                // Alignment of `DictEntry`
                 const aligned_input = try alignInput(input, T);
 
-                // Alignment of is already handled above
                 const parsed_key = try parseValueInner(
                     aligned_input,
                     @FieldType(T, "key"),
                     endian,
                 );
-
-                const remaining_input =
-                    try alignInput(aligned_input[parsed_key.size..], T);
-
                 const parsed_value = try parseValueInner(
-                    remaining_input,
+                    aligned_input[parsed_key.size],
                     @FieldType(T, "value"),
                     endian,
                 );
@@ -252,13 +227,8 @@ fn parseValueInner(
                     field_signatures,
                 ) |field_name, FieldType, field_signature|
                     if (mem.eql(u8, parsed_signature.value, field_signature)) {
-                        const aligned_remaining_input = try alignInput(remaining_input, FieldType);
-
-                        const parsed_field = try parseValueInner(
-                            aligned_remaining_input,
-                            FieldType,
-                            endian,
-                        );
+                        const parsed_field =
+                            try parseValueInner(remaining_input, FieldType, endian);
 
                         return .{
                             .value = .{
@@ -282,6 +252,8 @@ fn parseValueInner(
 
 const ParseStrError = error{ UnexpectedEnd, InvalidValue, TooLongStr } || AlignInputError;
 /// Parses string-like type: `Str`, `ObjectPath` or `Signature`.
+///
+/// Handles alignment.
 inline fn parseStrLike(
     input: []const u8,
     comptime T: type,
@@ -346,5 +318,6 @@ inline fn alignInput(input: []const u8, comptime V: type) AlignInputError![]cons
         types.getAlignmentPadding(input.ptr, types.getTypeAlignment(V));
 
     if (padding_len > input.len) return AlignInputError.UnexpectedEnd;
+
     return input[padding_len..];
 }
