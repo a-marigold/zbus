@@ -308,6 +308,26 @@ pub fn getStaticArrayElKey(comptime T: type) bool {
     return @field(T, "__ZBUS_EL_KEY__");
 }
 
+/// Like `Variant`, but it's known to always be only of one type.
+///
+/// `T` is a D-Bus type.
+///
+/// Used for performance where it is possible.
+pub fn StaticVariant(comptime T: type) type {
+    if (!isType(T)) @compileError("Expected a D-Bus type, found " ++ @typeName(T));
+
+    return struct {
+        variant: T,
+
+        pub const __IS_ZBUS_TYPE__ = void;
+        pub const __IS_ZBUS_STATIC_VARIANT__ = void;
+
+        pub fn init(variant: T) @This() {
+            return .{ .variant = variant };
+        }
+    };
+}
+
 /// Returns `true` if `T` is a D-Bus type defined in this file.
 fn isType(comptime T: type) bool {
     return switch (T) {
