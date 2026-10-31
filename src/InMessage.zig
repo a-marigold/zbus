@@ -100,14 +100,11 @@ fn ParseValueResult(comptime T: type) type {
 
 // TODO: size should include padding
 
-fn parseValueInner(
-    input: []const u8,
-    comptime T: type,
-    endian: lang.Endian,
-) ParseValueError!ParseValueResult(T) {
+fn parseValueInner(input: []const u8, comptime T: type, endian: lang.Endian) ParseValueError!ParseValueResult(T) {
     switch (T) {
         types.Bool => {
-            const aligned_input = try alignInput(input, T);
+            const padding = getInputPadding(input.ptr, T);
+            const aligned_input = try alignInput(input, padding);
 
             // `Bool` is encoded in `u32`
             const bool_size = @sizeOf(u32);
@@ -120,10 +117,11 @@ fn parseValueInner(
                 else => return ParseValueError.InvalidValue,
             };
 
-            return .{ .value = @"bool", .size = bool_size };
+            return .{ .value = @"bool", .size = padding + bool_size };
         },
         types.UnixFd => {
-            const aligned_input = try alignInput(input, T);
+            const padding = getInputPadding(input.ptr, T);
+            const aligned_input = try alignInput(input, padding);
 
             const FdType = @FieldType(T, "index");
             const fd_size = @sizeOf(FdType);
@@ -132,27 +130,20 @@ fn parseValueInner(
 
             const fd = mem.readInt(FdType, input[0..fd_size], endian);
 
-            return .{
-                .value = .{ .fd = fd },
-                .size = fd_size,
-            };
+            return .{ .value = .{ .fd = fd }, .size = padding + fd_size };
         },
         types.Str, types.ObjectPath, types.Signature => return parseStrLike(input, T, endian),
         else => {
             if (types.isNum(T)) {
-                const aligned_input = try alignInput(input, T);
+                const padding = getInputPadding(input.ptr, T);
+                const aligned_input = try alignInput(input, padding);
 
                 const NumType = @FieldType(T, "num");
-                const num = mem.readInt(
-                    NumType,
-                    aligned_input[0..@sizeOf(NumType)],
-                    endian,
-                );
+                const num_size = @sizeOf(NumType);
 
-                return .{
-                    .value = .{ .num = num },
-                    .size = @sizeOf(NumType),
-                };
+                const num = mem.readInt(NumType, aligned_input[0..num_size], endian);
+
+                return .{ .value = .{ .num = num }, .size = padding + num_size };
             }
             if (types.isStruct(T)) {
                 const StructType = @FieldType(T, "struct");
@@ -160,14 +151,10 @@ fn parseValueInner(
 
                 var @"struct": StructType = undefined;
 
-                var remaining_input = try alignInput(input, T);
+                var remaining_input = try alignInput(input, getInputPadding(input.ptr, T));
 
                 inline for (info.field_names, info.field_types) |field_name, FieldType| {
-                    const parsed_field = try parseValueInner(
-                        remaining_input,
-                        FieldType,
-                        endian,
-                    );
+                    const parsed_field = try parseValueInner(remaining_input, FieldType, endian);
 
                     @field(@"struct", field_name) = parsed_field.value;
 
@@ -180,13 +167,11 @@ fn parseValueInner(
                 };
             }
             if (types.isDictEntry(T)) {
-                const aligned_input = try alignInput(input, T);
+                const dict_entry_padding = getInputPadding(input.ptr, T);
+                const aligned_input = try alignInput(input, dict_entry_padding);
 
-                const parsed_key = try parseValueInner(
-                    aligned_input,
-                    @FieldType(T, "key"),
-                    endian,
-                );
+                const parsed_key = try parseValueInner(aligned_input, @FieldType(T, "key"), endian);
+
                 const parsed_value = try parseValueInner(
                     aligned_input[parsed_key.size],
                     @FieldType(T, "value"),
@@ -194,11 +179,8 @@ fn parseValueInner(
                 );
 
                 return .{
-                    .value = .{
-                        .key = parsed_key.value,
-                        .value = parsed_value.value,
-                    },
-                    .size = parsed_key.size + parsed_value.size,
+                    .value = .{ .key = parsed_key.value, .value = parsed_value.value },
+                    .size = dict_entry_padding + parsed_key.size + parsed_value.size,
                 };
             }
             if (types.isVariant(T)) {
@@ -216,28 +198,16 @@ fn parseValueInner(
                 // `Variant` is encoded as `Signature` of
                 // the variant value, followed by that value
 
-                const parsed_signature =
-                    try parseStrLike(input, types.Signature, endian);
+                const parsed_signature = try parseStrLike(input, types.Signature, endian);
 
                 const remaining_input = input[parsed_signature.size..];
 
-                inline for (
-                    info.field_names,
-                    info.field_types,
-                    field_signatures,
-                ) |field_name, FieldType, field_signature|
+                inline for (info.field_names, info.field_types, field_signatures) |field_name, FieldType, field_signature|
                     if (mem.eql(u8, parsed_signature.value, field_signature)) {
-                        const parsed_field =
-                            try parseValueInner(remaining_input, FieldType, endian);
+                        const parsed_field = try parseValueInner(remaining_input, FieldType, endian);
 
                         return .{
-                            .value = .{
-                                .variant = @unionInit(
-                                    UnionType,
-                                    field_name,
-                                    parsed_field.value,
-                                ),
-                            },
+                            .value = .{ .variant = @unionInit(UnionType, field_name, parsed_field.value) },
                             .size = parsed_signature.size + parsed_field.size,
                         };
                     };
@@ -254,11 +224,7 @@ const ParseStrError = error{ UnexpectedEnd, InvalidValue, TooLongStr } || AlignI
 /// Parses string-like type: `Str`, `ObjectPath` or `Signature`.
 ///
 /// Handles alignment.
-inline fn parseStrLike(
-    input: []const u8,
-    comptime T: type,
-    endian: lang.Endian,
-) ParseStrError!ParseValueResult(T) {
+inline fn parseStrLike(input: []const u8, comptime T: type, endian: lang.Endian) ParseStrError!ParseValueResult(T) {
     const aligned_input = switch (T) {
         types.Str, types.ObjectPath => try alignInput(input, T),
 
@@ -283,11 +249,7 @@ inline fn parseStrLike(
 
     const content_len: StrLenType = switch (str_len_size) {
         1 => aligned_input[0],
-        else => mem.readInt(
-            StrLenType,
-            aligned_input[0..str_len_size],
-            endian,
-        ),
+        else => mem.readInt(StrLenType, aligned_input[0..str_len_size], endian),
     };
     const full_str_len = content_len + null_terminator_len;
 
@@ -309,15 +271,18 @@ inline fn parseStrLike(
 
 const AlignInputError = error{UnexpectedEnd};
 /// Returns a slice of `input`, where `ptr`
-/// is aligned forward by alignment of type `V`.
+/// is aligned forward with `padding`.
 ///
 /// Value can be safely read with correct alignment from `aligned_input[0..]`
 /// (of course with bounds checking).
-inline fn alignInput(input: []const u8, comptime V: type) AlignInputError![]const u8 {
-    const padding_len =
-        types.getAlignmentPadding(input.ptr, types.getTypeAlignment(V));
+inline fn alignInput(input: []const u8, padding: usize) AlignInputError![]const u8 {
+    if (padding > input.len) return AlignInputError.UnexpectedEnd;
 
-    if (padding_len > input.len) return AlignInputError.UnexpectedEnd;
+    return input[padding..];
+}
 
-    return input[padding_len..];
+/// Returns alignment padding of type of value `V`
+/// to be added to `inputAddr` to get aligned input.
+inline fn getInputPadding(inputAddr: usize, comptime V: type) usize {
+    return types.getAlignmentPadding(inputAddr, types.getTypeAlignment(V));
 }
