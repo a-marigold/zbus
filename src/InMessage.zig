@@ -98,12 +98,10 @@ fn ParseValueResult(comptime T: type) type {
     };
 }
 
-// TODO: size should include padding
-
 fn parseValueInner(input: []const u8, comptime T: type, endian: lang.Endian) ParseValueError!ParseValueResult(T) {
     switch (T) {
         types.Bool => {
-            const padding = getInputPadding(input.ptr, T);
+            const padding = getValuePadding(input.ptr, T);
             const aligned_input = try alignInput(input, padding);
 
             // `Bool` is encoded in `u32`
@@ -120,7 +118,7 @@ fn parseValueInner(input: []const u8, comptime T: type, endian: lang.Endian) Par
             return .{ .value = @"bool", .size = padding + bool_size };
         },
         types.UnixFd => {
-            const padding = getInputPadding(input.ptr, T);
+            const padding = getValuePadding(input.ptr, T);
             const aligned_input = try alignInput(input, padding);
 
             const FdType = @FieldType(T, "index");
@@ -135,7 +133,7 @@ fn parseValueInner(input: []const u8, comptime T: type, endian: lang.Endian) Par
         types.Str, types.ObjectPath, types.Signature => return parseStrLike(input, T, endian),
         else => {
             if (types.isNum(T)) {
-                const padding = getInputPadding(input.ptr, T);
+                const padding = getValuePadding(input.ptr, T);
                 const aligned_input = try alignInput(input, padding);
 
                 const NumType = @FieldType(T, "num");
@@ -151,7 +149,7 @@ fn parseValueInner(input: []const u8, comptime T: type, endian: lang.Endian) Par
 
                 var @"struct": StructType = undefined;
 
-                var remaining_input = try alignInput(input, getInputPadding(input.ptr, T));
+                var remaining_input = try alignInput(input, getValuePadding(input.ptr, T));
 
                 inline for (info.field_names, info.field_types) |field_name, FieldType| {
                     const parsed_field = try parseValueInner(remaining_input, FieldType, endian);
@@ -167,7 +165,7 @@ fn parseValueInner(input: []const u8, comptime T: type, endian: lang.Endian) Par
                 };
             }
             if (types.isDictEntry(T)) {
-                const dict_entry_padding = getInputPadding(input.ptr, T);
+                const dict_entry_padding = getValuePadding(input.ptr, T);
                 const aligned_input = try alignInput(input, dict_entry_padding);
 
                 const parsed_key = try parseValueInner(aligned_input, @FieldType(T, "key"), endian);
@@ -215,7 +213,7 @@ fn parseValueInner(input: []const u8, comptime T: type, endian: lang.Endian) Par
                 return ParseValueError.VariantTypeMismatch;
             }
 
-            @compileError("Unknown type `T`");
+            @compileError("Expected a D-Bus type, found " ++ @typeName(T));
         },
     }
 }
@@ -232,7 +230,7 @@ inline fn parseStrLike(input: []const u8, comptime T: type, endian: lang.Endian)
         // 'cause it starts from `u8` (the length)
         types.Signature => input,
 
-        else => @compileError("Unknown type `T`"),
+        else => @compileError("Expected `Str`, `ObjectPath` or `Signature`, found " ++ @typeName(T)),
     };
 
     const StrLenType = switch (T) {
@@ -283,6 +281,6 @@ inline fn alignInput(input: []const u8, padding: usize) AlignInputError![]const 
 
 /// Returns alignment padding of type of value `V`
 /// to be added to `inputAddr` to get aligned input.
-inline fn getInputPadding(inputAddr: usize, comptime V: type) usize {
+inline fn getValuePadding(inputAddr: usize, comptime V: type) usize {
     return types.getAlignmentPadding(inputAddr, types.getTypeAlignment(V));
 }

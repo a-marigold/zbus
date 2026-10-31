@@ -11,7 +11,6 @@
 
 const std = @import("std");
 const mem = std.mem;
-const Io = std.Io;
 const lang = std.lang;
 
 /// Value is taken from the spec:
@@ -119,7 +118,7 @@ pub const Signature = struct {
 pub fn Struct(comptime T: type) type {
     const info = @typeInfo(T).@"struct";
     inline for (info.field_types) |FieldType|
-        if (!isType(FieldType)) @compileError("Struct type must have only D-Bus types in fields");
+        if (!isType(FieldType)) @compileError("`Struct` must have only D-Bus types in fields");
 
     return struct {
         @"struct": T,
@@ -137,9 +136,39 @@ pub inline fn isStruct(comptime T: type) bool {
     return @hasField(T, "__IS_ZBUS_STRUCT__");
 }
 
+/// Returns a D-Bus dict entry with key type `K` and value type `V`.
+///
+/// `K` must be `Num`, `Bool`, `UnixFd`, `Str` `ObjectPath`
+/// or `Signature`, but not a container like `Struct`, `Array` or `Variant`.
+///
+/// Dict entries must only be array elements, and if
+/// one isn't in an array, serialization fails at comptime.
+pub fn DictEntry(comptime K: type, comptime V: type) type {
+    if (K != Str and K != ObjectPath and K != Signature and
+        K != Bool and K != UnixFd and !isNum(K))
+        @compileError("Expected basic type of key, found " ++ @typeName(K));
+
+    if (!isType(V)) @compileError("Expected D-Bus type of value, found " ++ @typeName(V));
+
+    return struct {
+        entry: struct { key: K, value: V },
+
+        pub const __IS_ZBUS_DICT_ENTRY__ = true;
+
+        pub const __ZBUS_ALIGNMENT__ = 8;
+
+        pub inline fn init(key: K, value: V) @This() {
+            return .{ .entry = .{ .key = key, .value = value } };
+        }
+    };
+}
+pub inline fn isDictEntry(comptime T: type) bool {
+    return @hasField(T, "__IS_ZBUS_DICT_ENTRY__");
+}
+
 /// Returns a D-Bus array with element type `E`.
 pub fn Array(comptime E: type) type {
-    if (!isType(E)) @compileError("Array elements must only be of a D-Bus type");
+    if (!isType(E)) @compileError("`Array` must have only D-Bus element type");
 
     return struct {
         array: []const E,
@@ -158,35 +187,6 @@ pub fn Array(comptime E: type) type {
 }
 pub inline fn isArray(comptime T: type) bool {
     return @hasField(T, "__IS_ZBUS_ARRAY__");
-}
-
-/// Returns a D-Bus dict entry with key type `K` and value type `V`.
-///
-/// `K` must be `Num`, `Bool`, `UnixFd`, `Str` `ObjectPath`
-/// or `Signature`, but not a container like `Struct`, `Array` or `Variant`.
-///
-/// Dict entries must only be array elements, and if
-/// one isn't in an array, serialization fails at comptime.
-pub fn DictEntry(comptime K: type, comptime V: type) type {
-    if (K != Str and K != ObjectPath and K != Signature and
-        K != Bool and K != UnixFd and !isNum(K)) @compileError("Invalid key type `K`");
-
-    if (!isType(V)) @compileError("Invalid value type `V`");
-
-    return struct {
-        entry: struct { key: K, value: V },
-
-        pub const __IS_ZBUS_DICT_ENTRY__ = true;
-
-        pub const __ZBUS_ALIGNMENT__ = 8;
-
-        pub inline fn init(key: K, value: V) @This() {
-            return .{ .entry = .{ .key = key, .value = value } };
-        }
-    };
-}
-pub inline fn isDictEntry(comptime T: type) bool {
-    return @hasField(T, "__IS_ZBUS_DICT_ENTRY__");
 }
 
 /// `U` is a union of D-Bus types.
@@ -213,10 +213,10 @@ pub inline fn isDictEntry(comptime T: type) bool {
 pub fn Variant(comptime U: type) type {
     const info = @typeInfo(U).@"union";
 
-    if (info.tag_type == null) @compileError("Union of Variant must be tagged");
+    if (info.tag_type == null) @compileError("Union of `Variant` must be tagged");
 
     inline for (info.field_types) |FieldType|
-        if (!isType(FieldType)) @compileError("Union of Variant must have only D-bus types in fields");
+        if (!isType(FieldType)) @compileError("Union of `Variant` must have only D-bus types in fields");
 
     return struct {
         variant: U,
@@ -286,8 +286,7 @@ pub fn VariantArrayEntry(key: anytype, comptime V: type) type {
     return struct {
         value: V,
 
-        // TODO: __ZBUS prefix
-        pub const KEY = key;
+        pub const __ZBUS_VARIANT_ENTRY_KEY__ = key;
 
         pub const __IS_ZBUS_STATIC_VARIANT_ARRAY_ENTRY__ = true;
 
@@ -419,7 +418,7 @@ fn signatureFromTypeInner(
             }
             if (isVariant(T)) return "v";
 
-            @compileError("Unknown type `T`");
+            @compileError("Expected a D-Bus type, found " ++ @typeName(T));
         },
     };
 }

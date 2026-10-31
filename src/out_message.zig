@@ -50,8 +50,7 @@ pub fn OutMessage(comptime message_type: message_types.MessageType, comptime Bod
 
             try serializeValue(writer, Header.Fields, header.fields);
 
-            if (Body) |BodyType|
-                try serializeValue(writer, BodyType, self.body);
+            if (Body) |BodyType| try serializeValue(writer, BodyType, self.body);
         }
     };
 }
@@ -123,11 +122,7 @@ fn serializeValueInner(
         types.UnixFd => {
             try alignValue(writer, T, pos);
 
-            try writer.writeInt(
-                @FieldType(T, "index"),
-                value.index,
-                endian,
-            );
+            try writer.writeInt(@FieldType(T, "index"), value.index, endian);
         },
         types.Str, types.ObjectPath => {
             const str: [:0]const u8 = @ptrCast(value);
@@ -137,14 +132,12 @@ fn serializeValueInner(
             try writer.writeInt(u32, @intCast(str.len), endian);
             try writer.writeAll(str);
         },
-
         types.Signature => {
             // `Signature` doesn't require alignment 'cause it starts from `u8` (the length)
 
             try writer.writeByte(value.signature.len);
             try writer.writeAll(value.signature);
         },
-
         else => {
             if (types.isNum(T)) {
                 const NumType = @FieldType(T, "num");
@@ -196,23 +189,19 @@ fn serializeValueInner(
                     const field_tag = @field(TagType, field_name);
 
                     if (field_tag == tag) {
-                        try serializeValue(
-                            writer,
-                            types.Signature.init(types.signatureFromType(FieldType)),
-                            endian,
-                        );
-                        try serializeValue(
-                            writer,
-                            @field(value, field_name),
-                            endian,
-                        );
+                        // `Variant` is encoded as `Signature` of
+                        // the variant value, followed by that value
+                        const field_signature = types.Signature.init(types.signatureFromType(FieldType));
+
+                        try serializeValue(writer, field_signature, endian);
+                        try serializeValue(writer, @field(value, field_name), endian);
                     }
                 }
 
                 return;
             }
 
-            @compileError("Unknown type `T`");
+            @compileError("Expected a D-Bus type, found " ++ @typeName(T));
         },
     }
 }
@@ -224,10 +213,7 @@ fn serializeValueInner(
 ///
 /// `pos` is the number of totally written bytes to `writer`.
 inline fn alignValue(writer: *Io.Writer, comptime T: type, pos: usize) Io.Writer.Error!void {
-    // TODO: Use something more efficient than a loop with `writeByte`
+    const padding = types.getAlignmentPadding(pos, types.getTypeAlignment(T));
 
-    const padding_len =
-        types.getAlignmentPadding(pos, types.getTypeAlignment(T));
-
-    for (0..padding_len) |_| try writer.writeByte(0);
+    for (0..padding) |_| try writer.writeByte(0);
 }
