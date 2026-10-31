@@ -43,27 +43,112 @@ pub const Header = struct {
     fields: Fields,
 
     /// Despite that header fields in the spec are in
-    /// array of variants, here it's a static `VariantArray` for performance.
+    /// array of variants, here it's `StaticArray` for performance.
     ///
     /// Values are nullable 'cause required fields depend on the message type.
     ///
     /// Codes of fields are taken from https://dbus.freedesktop.org/doc/dbus-specification.html#message-protocol-messages.
-    pub const Fields = types.VariantArray(struct {
-        object_path: types.VariantArrayEntry(1, ?types.ObjectPath),
-        interface: types.VariantArrayEntry(2, ?types.Str),
-        method: types.VariantArrayEntry(3, ?types.Str),
-        error_name: types.VariantArrayEntry(4, ?types.Str),
+    pub const Fields = types.StaticArray(struct {
+        object_path: ?types.StaticArrayEl(types.Num(u8).init(1), types.ObjectPath),
+        interface: ?types.StaticArrayEl(types.Num(u8).init(2), types.Str),
+        method: ?types.StaticArrayEl(types.Num(u8).init(3), types.Str),
+        error_name: ?types.StaticArrayEl(types.Num(u8).init(4), types.Str),
 
         /// Serial number of the message this message is a reply to.
-        reply_serial: types.VariantArrayEntry(5, ?types.Num(u32)),
+        reply_serial: ?types.StaticArrayEl(types.Num(u8).init(5), types.Num(u32)),
 
-        destination: types.VariantArrayEntry(6, ?types.Str),
-        sender: types.VariantArrayEntry(7, ?types.Str),
-
-        body_signature: types.VariantArrayEntry(8, ?types.Signature),
-        unix_fds: types.VariantArrayEntry(9, ?types.Num(u32)),
+        destination: ?types.StaticArrayEl(types.Num(u8).init(6), types.Str),
+        sender: ?types.StaticArrayEl(types.Num(u8).init(7), types.Str),
+        body_signature: ?types.StaticArrayEl(types.Num(u8).init(8), types.Signature),
+        unix_fds: ?types.StaticArrayEl(types.Num(u8).init(9), types.Num(u32)),
     });
 };
+
+pub const ParseError = error{
+    InvalidHeaderFormat,
+    InvalidMessageType,
+    UnsupportedVersion,
+} || ParseValueError || mem.Allocator.Error;
+pub fn parse(gpa: mem.Allocator, comptime M: type, reader: *Io.Reader) ParseError!M {
+    const header = try parseHeader(reader);
+
+    const fields_input, const body_input = block: {
+        const input = try gpa.alloc(u8, header.fields_len + header.body_len);
+
+        break :block .{
+            input[0..header.fields_len],
+            input[header.fields_len..header.body_len],
+        };
+    };
+
+    const fields = try parseValue(fields_input, Header.Fields, header.endian);
+
+    _ = body_input;
+    _ = fields;
+}
+
+inline fn parseHeader(reader: *Io.Reader) Io.Reader.Error!struct {
+    endian: lang.Endian,
+    message_type: @backingInt(Header.MessageType),
+    flags: @FieldType(Header, "flags"),
+    version: u8,
+    body_len: @FieldType(Header, "body_len"),
+    serial: @FieldType(Header, "serial"),
+    fields_len: u32,
+} {
+    // (four `u8`) + (two `u32`) + (one `u32`, which is size of fields)
+    const header_size = 16;
+
+    const header = block: {
+        // Copy to stack for correct integers alignment
+        var buffer: [header_size]u8 align(8) = undefined;
+        try reader.readSliceAll(&buffer);
+
+        break :block buffer;
+    };
+    comptime var header_pos = 0;
+
+    const endian: lang.Endian = switch (header[header_pos]) {
+        'l' => .little,
+        'B' => .big,
+        else => ParseError.InvalidHeader,
+    };
+    header_pos += 1;
+
+    const message_type = header[header_pos];
+    header_pos += 1;
+
+    const flags = header[header_pos];
+    header_pos += 1;
+
+    const version = header[header_pos];
+    header_pos += 1;
+
+    const BodyLenType = @FieldType(Header.BodySize, "size");
+    const body_len_size = @sizeOf(BodyLenType);
+
+    const body_len = mem.readInt(BodyLenType, header[header_pos..body_len_size], endian);
+    header_pos += @sizeOf(BodyLenType);
+
+    const SerialType = @FieldType(Header, "serial");
+    const serial_size = @sizeOf(SerialType);
+
+    const serial = mem.readInt(SerialType, header[header_pos..serial_size], endian);
+    header_pos += @sizeOf(SerialType);
+
+    const fields_len_size = @sizeOf(u32);
+    const fields_len = mem.readInt(u32, header[header_pos..fields_len_size], endian);
+
+    return .{
+        .endian = endian,
+        .message_type = message_type,
+        .flags = flags,
+        .version = version,
+        .body_len = body_len,
+        .serial = serial,
+        .fields_len = fields_len,
+    };
+}
 
 pub const ParseValueError = error{
     /// The input ended too early so the data is interrupted
