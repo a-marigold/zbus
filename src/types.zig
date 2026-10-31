@@ -234,6 +234,8 @@ pub inline fn isVariant(comptime T: type) bool {
 ///
 /// `T` is a struct with `StaticArrayEl` in fields.
 ///
+/// Fields of `T` can be optional.
+///
 /// Why is it used:
 ///
 /// In D-Bus, Arrays containing Structs with some keys and Variants appear quite often.
@@ -247,8 +249,18 @@ pub inline fn isVariant(comptime T: type) bool {
 /// `Header` of messages is an array of structs, where bytes are keys and variants are values.
 ///  But there are only 9 standardized, predefined possible fields.
 pub fn StaticArray(comptime T: type) type {
-    if (!isStaticArrayEl(T))
-        @compileError("Expected `StaticArrayEl`, found " ++ @typeName(T));
+    const info = @typeInfo(T).@"struct";
+    inline for (info.field_types) |FieldType| {
+        const field_info = @typeInfo(FieldType);
+
+        const is_field_el = switch (field_info) {
+            .optional => |optional| isStaticArrayEl(optional.child),
+            else => isStaticArrayEl(FieldType),
+        };
+
+        if (!is_field_el)
+            @compileError("Expected `StaticArrayEl`, found " ++ @typeName(T));
+    }
 
     return struct {
         @"struct": T,
@@ -265,6 +277,8 @@ pub fn isStaticArray(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_STATIC_ARRAY__");
 }
 
+/// `key` is a comptime value of D-Bus type, used to
+/// recognize element during `StaticArray` serialization or parsing.
 pub fn StaticArrayEl(comptime key: anytype, comptime T: type) type {
     const KeyType = @TypeOf(key);
     if (!isType(KeyType))
