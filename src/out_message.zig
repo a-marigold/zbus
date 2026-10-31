@@ -10,8 +10,6 @@ const message_types = @import("message_types.zig");
 
 const ENDIAN = builtin.target.cpu.arch.endian();
 
-// TODO: better compile error messages
-
 /// The current D-Bus protocol version.
 ///
 /// All incoming and outcoming messages
@@ -73,23 +71,23 @@ pub const Header = struct {
     fields: Fields,
 
     /// Despite that header fields in the spec are in
-    /// array of variants, here it's a struct for performance.
+    /// array of variants, here it's `StaticArray` for performance.
     ///
     /// Values are nullable 'cause required fields depend on the message type.
     ///
     /// Codes of fields are taken from https://dbus.freedesktop.org/doc/dbus-specification.html#message-protocol-messages.
-    pub const Fields = types.VariantArray(struct {
-        object_path: types.VariantArrayEntry(1, types.ObjectPath),
-        interface: types.VariantArrayEntry(2, types.Str),
-        method: types.VariantArrayEntry(3, types.Str),
-        error_name: types.VariantArrayEntry(4, types.Str),
+    pub const Fields = types.StaticArray(struct {
+        object_path: ?types.StaticArrayEl(types.Num(u8).init(1), types.ObjectPath),
+        interface: ?types.StaticArrayEl(types.Num(u8).init(2), types.Str),
+        method: ?types.StaticArrayEl(types.Num(u8).init(3), types.Str),
+        error_name: ?types.StaticArrayEl(types.Num(u8).init(4), types.Str),
 
         /// Serial number of the message this message is a reply to.
-        reply_serial: types.VariantArrayEntry(5, ?types.Num(u32)),
+        reply_serial: ?types.StaticArrayEl(types.Num(u8).init(5), types.Num(u32)),
 
-        destination: types.VariantArrayEntry(6, types.Str),
-        sender: types.VariantArrayEntry(7, types.Str),
-        unix_fds: types.VariantArrayEntry(9, ?types.Num(u32)),
+        destination: ?types.StaticArrayEl(types.Num(u8).init(6), types.Str),
+        sender: ?types.StaticArrayEl(types.Num(u8).init(7), types.Str),
+        unix_fds: ?types.StaticArrayEl(types.Num(u8).init(9), types.Num(u32)),
     });
 };
 
