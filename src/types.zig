@@ -1,9 +1,9 @@
 //! D-Bus type wrappers used to be recognized
 //! by message serialization and parsing functions.
 //!
-//! Every type is semantically validated at comptime, except UTF-8 in strings.
+//! Every type is semantically validated at comptime.
 //!
-//! Implements every type in accordance with the specification:
+//! Implements every type in accordance with the spec:
 //!
 //! https://dbus.freedesktop.org/doc/dbus-specification.html#type-system
 
@@ -11,7 +11,6 @@
 
 const std = @import("std");
 const mem = std.mem;
-const lang = std.lang;
 
 /// Value is taken from the spec:
 ///
@@ -34,8 +33,6 @@ pub fn Num(comptime T: type) type {
     return struct {
         num: T,
 
-        pub const __IS_ZBUS_NUM__ = true;
-
         pub const __ZBUS_ALIGNMENT__ = switch (T) {
             u8 => 1,
             u16, i16 => 2,
@@ -44,13 +41,16 @@ pub fn Num(comptime T: type) type {
             else => unreachable,
         };
 
+        pub const __IS_ZBUS_TYPE__ = void;
+        pub const __IS_ZBUS_NUM__ = void;
+
         pub inline fn init(num: T) @This() {
             return .{ .num = num };
         }
     };
 }
 pub inline fn isNum(comptime T: type) type {
-    return @hasField(T, "__IS_ZBUS_NUM__");
+    return @hasDecl(T, "__IS_ZBUS_NUM__");
 }
 
 pub const Bool = struct {
@@ -123,9 +123,10 @@ pub fn Struct(comptime T: type) type {
     return struct {
         @"struct": T,
 
-        pub const __IS_ZBUS_STRUCT__ = true;
-
         pub const __ZBUS_ALIGNMENT__ = 8;
+
+        pub const __IS_ZBUS_TYPE__ = void;
+        pub const __IS_ZBUS_STRUCT__ = void;
 
         pub inline fn init(@"struct": T) @This() {
             return .{ .@"struct" = @"struct" };
@@ -133,7 +134,7 @@ pub fn Struct(comptime T: type) type {
     };
 }
 pub inline fn isStruct(comptime T: type) bool {
-    return @hasField(T, "__IS_ZBUS_STRUCT__");
+    return @hasDecl(T, "__IS_ZBUS_STRUCT__");
 }
 
 /// Returns a D-Bus dict entry with key type `K` and value type `V`.
@@ -153,9 +154,10 @@ pub fn DictEntry(comptime K: type, comptime V: type) type {
     return struct {
         entry: struct { key: K, value: V },
 
-        pub const __IS_ZBUS_DICT_ENTRY__ = true;
-
         pub const __ZBUS_ALIGNMENT__ = 8;
+
+        pub const __IS_ZBUS_TYPE__ = void;
+        pub const __IS_ZBUS_DICT_ENTRY__ = void;
 
         pub inline fn init(key: K, value: V) @This() {
             return .{ .entry = .{ .key = key, .value = value } };
@@ -163,7 +165,7 @@ pub fn DictEntry(comptime K: type, comptime V: type) type {
     };
 }
 pub inline fn isDictEntry(comptime T: type) bool {
-    return @hasField(T, "__IS_ZBUS_DICT_ENTRY__");
+    return @hasDecl(T, "__IS_ZBUS_DICT_ENTRY__");
 }
 
 /// Returns a D-Bus array with element type `E`.
@@ -173,12 +175,13 @@ pub fn Array(comptime E: type) type {
     return struct {
         array: []const E,
 
-        pub const __IS_ZBUS_ARRAY__ = true;
-
         // Length of `Array` is encoded as `u32`,
         // so the alignment is 4.
         // Alignment of elements is handled independently
         pub const __ZBUS_ALIGNMENT__ = 4;
+
+        pub const __IS_ZBUS_TYPE__ = void;
+        pub const __IS_ZBUS_ARRAY__ = void;
 
         pub inline fn init(array: []const E) @This() {
             return .{ .array = array };
@@ -186,7 +189,7 @@ pub fn Array(comptime E: type) type {
     };
 }
 pub inline fn isArray(comptime T: type) bool {
-    return @hasField(T, "__IS_ZBUS_ARRAY__");
+    return @hasDecl(T, "__IS_ZBUS_ARRAY__");
 }
 
 /// `U` is a union of D-Bus types.
@@ -198,18 +201,6 @@ pub inline fn isArray(comptime T: type) bool {
 /// `U` can just contain all the D-Bus types found in this file.
 ///
 /// Unions without tags (bare unions) aren't allowed.
-///
-/// Example:
-/// ```zig
-/// const IntOrStr = union(enum) {
-///   int: Num(u64),
-///   str: Str,
-/// };
-/// const IntOrStrVariant = Variant(IntOrStr);
-///
-/// const intOrStr: IntOrStrVariant = .init(.{ .int = 16 });
-/// doSomething(IntOrStr.variant.int);
-/// ```
 pub fn Variant(comptime U: type) type {
     const info = @typeInfo(U).@"union";
 
@@ -221,13 +212,14 @@ pub fn Variant(comptime U: type) type {
     return struct {
         variant: U,
 
-        pub const __IS_ZBUS_VARIANT__ = true;
-
         // `Variant` is serialized as `Signature` of
         // the variant value, followed by that value.
         // `Signature` doesn't require alignment,
         // so `Variant` also doesn't.
         // Alignment of the value is handled independently
+
+        pub const __IS_ZBUS_TYPE__ = void;
+        pub const __IS_ZBUS_VARIANT__ = void;
 
         pub inline fn init(variant: U) @This() {
             return .{ .variant = variant };
@@ -235,79 +227,79 @@ pub fn Variant(comptime U: type) type {
     };
 }
 pub inline fn isVariant(comptime T: type) bool {
-    return @hasField(T, "__IS_ZBUS_VARIANT__");
+    return @hasDecl(T, "__IS_ZBUS_VARIANT__");
 }
 
-// TODO: `VariantArray` may be not only for variants
-
-/// Not an official D-Bus type. Under the hood, it maps to valid D-Bus
+/// Not an official D-Bus type. Under the hood, it maps to valid D-Bus array.
 ///
-/// `T` is a struct with `VariantArrayEntry` in fields.
+/// `T` is a struct with `StaticArrayEl` in fields.
 ///
 /// Why is it used:
 ///
-/// In D-Bus, Arrays containing Structs with some keys and Variants (`a{sv}` or `a(sv)`) appear quite often.
+/// In D-Bus, Arrays containing Structs with some keys and Variants appear quite often.
 /// But almost all (if not all) of them have a strict,
-/// predefined amount of possible keys and types of values.
+/// predefined keys and predefined types of values.
 ///
-/// Keys and types of their values are known at comptime,
+/// Keys and value types of them are known at comptime,
 /// so parsing messages doesn't require dynamic allocation for such arrays.
 ///
-/// Examples:
-/// - `Message.Header` is an array of structs,
-///   where bytes are keys and variants are values.
-///   But as you know, there are only 9 standardized, predefined possible fields.
-/// - `org.freedesktop.impl.portal.FileChooser`, `OpenFile` method,
-///   has several input arguments that match the mentioned Arrays:
-///   Structs of them have `Str` as keys and `Variant` as values,
-///   and possible keys are predefined by the specification.
-pub fn VariantArray(comptime T: type) type {
+/// Example:
+/// `Header` of messages is an array of structs, where bytes are keys and variants are values.
+///  But there are only 9 standardized, predefined possible fields.
+pub fn StaticArray(comptime T: type) type {
+    if (!isStaticArrayEl(T))
+        @compileError("Expected `StaticArrayEl`, found " ++ @typeName(T));
+
     return struct {
         @"struct": T,
 
-        pub const __IS_ZBUS_STATIC_VARIANT_ARRAY__ = true;
+        pub const __IS_ZBUS_TYPE__ = void;
+        pub const __IS_ZBUS_STATIC_ARRAY__ = void;
 
-        // Length of `Array` is encoded as `u32`,
-        // so the alignment is 4.
-        // Alignment of elements is handled independently
-        pub const __ZBUS_ALIGNMENT__ = 4;
-
-        pub inline fn init(@"struct": T) @This() {
+        pub fn init(@"struct": T) @This() {
             return .{ .@"struct" = @"struct" };
         }
     };
 }
-pub inline fn isVariantArray(comptime T: type) type {
-    return @hasField(T, "__IS_ZBUS_STATIC_VARIANT_ARRAY__");
+pub fn isStaticArray(comptime T: type) bool {
+    return @hasDecl(T, "__IS_ZBUS_STATIC_ARRAY__");
 }
 
-/// `key` is a comptime-known value of any D-Bus type.
-pub fn VariantArrayEntry(key: anytype, comptime V: type) type {
+pub fn StaticArrayEl(comptime key: anytype, comptime T: type) type {
+    const KeyType = @TypeOf(key);
+    if (!isType(KeyType))
+        @compileError("Expected a D-Bus type of key, found " ++ KeyType);
+
+    if (!isType(T))
+        @compileError("Expected a D-Bus type `T`, found " ++ @typeName(T));
+
     return struct {
-        value: V,
+        el: T,
 
-        pub const __ZBUS_VARIANT_ENTRY_KEY__ = key;
+        pub const __ZBUS_EL_KEY__ = key;
 
-        pub const __IS_ZBUS_STATIC_VARIANT_ARRAY_ENTRY__ = true;
+        pub const __IS_ZBUS_TYPE__ = void;
+        pub const __IS_ZBUS_STATIC_ARRAY_EL__ = void;
 
-        // TODO: alignment
-
-        pub inline fn init(value: V) @This() {
-            return .{ .value = value };
+        pub fn init(el: T) @This() {
+            return .{ .el = el };
         }
     };
 }
-pub inline fn isVariantArrayEntry(comptime T: type) type {
-    return @hasField(T, "__IS_ZBUS_STATIC_VARIANT_ARRAY_ENTRY__");
+pub fn isStaticArrayEl(comptime T: type) bool {
+    return @hasDecl(T, "__IS_ZBUS_STATIC_ARRAY_EL__");
+}
+/// Returns the comptime key of `StaticArrayEl`.
+pub fn getStaticArrayElKey(comptime T: type) bool {
+    return @field(T, "__ZBUS_EL_KEY__");
 }
 
 /// Returns `true` if `T` is a D-Bus type defined in this file.
-///
-/// Otherwise, returns `false`.
 fn isType(comptime T: type) bool {
     return switch (T) {
         Bool, UnixFd, Str, ObjectPath, Signature => true,
-        else => if (isNum(T) or isStruct(T) or isDictEntry(T) or isArray(T) or isVariant(T)) true else false,
+
+        else => @hasDecl(T, "__IS_ZBUS_TYPE__"),
     };
 }
 
@@ -427,7 +419,7 @@ fn signatureFromTypeInner(
 ///
 /// It's always a power of two.
 pub fn getTypeAlignment(comptime T: type) comptime_int {
-    return @field(T, "ALGINMENT");
+    return @field(T, "__ZBUS_ALIGNMENT__");
 }
 
 /// Returns the amount of bytes that `addr` is missing to be aligned forward.
