@@ -225,45 +225,61 @@ pub inline fn isVariant(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_VARIANT__");
 }
 
-/// Not an official D-Bus type. Under the hood, it maps to valid D-Bus array.
+/// Not an official D-Bus type. Under the hood, it maps to valid D-Bus array of structs.
 ///
 /// `T` is a struct with `StaticArrayEl` in fields.
+/// `StaticArrayEl` must have the same type in their keys and values.
+/// E.g, only `Num` in key and only `StaticVariant` for all elements.
 ///
 /// Fields of `T` can be optional.
 ///
 /// Why is it used:
-///
-/// In D-Bus, Arrays containing Structs with some keys and Variants appear quite often.
-/// But almost all (if not all) of them have a strict,
-/// predefined keys and predefined types of values.
 ///
 /// Keys and value types of them are known at comptime,
 /// so parsing messages doesn't require dynamic allocation for such arrays.
 ///
 /// Example:
 /// `Header` of messages is an array of structs, where bytes are keys and variants are values.
-///  But there are only 9 standardized, predefined possible fields.
+/// But there are only 9 standardized, predefined possible fields.
 pub fn StaticArray(comptime T: type) type {
     const info = @typeInfo(T).@"struct";
-    inline for (info.field_types) |FieldType| {
-        const field_info = @typeInfo(FieldType);
 
-        const is_field_el = switch (field_info) {
+    const FirstElKeyType = info.field_types[0].KeyType;
+    const FirstElValueType = @FieldType(info.field_types[0], "el");
+
+    inline for (info.field_types) |ElType| {
+        const el_info = @typeInfo(ElType);
+
+        const is_static_array_el = switch (el_info) {
             .optional => |optional| isStaticArrayEl(optional.child),
-            else => isStaticArrayEl(FieldType),
+            else => isStaticArrayEl(ElType),
         };
+        if (!is_static_array_el) @compileError("Expected `StaticArrayEl`, found " ++ @typeName(T));
 
-        if (!is_field_el)
-            @compileError("Expected `StaticArrayEl`, found " ++ @typeName(T));
+        const ElKeyType = ElType.KeyType;
+        if (!eqlTypes(ElKeyType, FirstElKeyType))
+            @compileError("Types of keys must be the same");
+
+        const ElValueType = @FieldType(ElType, "el");
+        if (!eqlTypes(ElValueType, FirstElValueType))
+            @compileError("Types of elements must be the same");
     }
 
     return struct {
         @"struct": T,
 
+        pub const ElKeyType = FirstElKeyType;
+        pub const ElValueType = FirstElValueType;
+
+        // Length of `Array` is encoded as `u32`,
+        // so the alignment is 4.
+        // Alignment of elements is handled independently
+        pub const __ZBUS_ALIGNMENT__ = 4;
+
         pub const __IS_ZBUS_TYPE__ = void;
         pub const __IS_ZBUS_STATIC_ARRAY__ = void;
 
-        pub fn init(@"struct": T) @This() {
+        pub inline fn init(@"struct": T) @This() {
             return .{ .@"struct" = @"struct" };
         }
     };
@@ -274,23 +290,31 @@ pub fn isStaticArray(comptime T: type) bool {
 
 /// `key` is a comptime value of D-Bus type, used to
 /// recognize element during `StaticArray` serialization or parsing.
-pub fn StaticArrayEl(comptime key: anytype, comptime T: type) type {
-    const KeyType = @TypeOf(key);
-    if (!isType(KeyType))
-        @compileError("Expected a D-Bus type of key, found " ++ KeyType);
+///
+/// `V` is type of value of the key-value pair.
+///
+/// The same as `Struct` key-value pair, but the key is static.
+pub fn StaticArrayEl(comptime key: anytype, comptime V: type) type {
+    const ElKeyType = @TypeOf(key);
+    if (!isType(ElKeyType))
+        @compileError("Expected a D-Bus type of key, found " ++ ElKeyType);
 
-    if (!isType(T))
-        @compileError("Expected a D-Bus type `T`, found " ++ @typeName(T));
+    if (!isType(V))
+        @compileError("Expected a D-Bus type `V`, found " ++ @typeName(V));
 
     return struct {
-        el: T,
+        el: V,
 
+        pub const KeyType = ElKeyType;
         pub const __ZBUS_EL_KEY__ = key;
+
+        // The same as alignment of `Struct`
+        pub const ALIGNMENT = 8;
 
         pub const __IS_ZBUS_TYPE__ = void;
         pub const __IS_ZBUS_STATIC_ARRAY_EL__ = void;
 
-        pub fn init(el: T) @This() {
+        pub inline fn init(el: V) @This() {
             return .{ .el = el };
         }
     };
@@ -299,8 +323,8 @@ pub fn isStaticArrayEl(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_STATIC_ARRAY_EL__");
 }
 /// Returns the comptime key of `StaticArrayEl`.
-pub fn getStaticArrayElKey(comptime T: type) bool {
-    return @field(T, "__ZBUS_EL_KEY__");
+pub fn getStaticArrayElKey(comptime T: type) T.KeyType {
+    return T.__ZBUS_EL_KEY__;
 }
 
 /// Like `Variant`, but it's known to always be only of one type.
@@ -314,20 +338,48 @@ pub fn StaticVariant(comptime T: type) type {
     return struct {
         variant: T,
 
+        // `Variant` is serialized as `Signature` of
+        // the variant value, followed by that value.
+        // `Signature` doesn't require alignment,
+        // so `Variant` also doesn't.
+        // Alignment of the value is handled independently
+
         pub const __IS_ZBUS_TYPE__ = void;
         pub const __IS_ZBUS_STATIC_VARIANT__ = void;
 
-        pub fn init(variant: T) @This() {
+        pub inline fn init(variant: T) @This() {
             return .{ .variant = variant };
         }
     };
+}
+pub fn isStaticVariant(comptime T: type) bool {
+    return @hasDecl(T, "__IS_ZBUS_STATIC_VARIANT__");
+}
+
+/// Compares `A` and `B` D-Bus types.
+fn eqlTypes(comptime A: type, comptime B: type) bool {
+    return comptime if (isNum(A))
+        isNum(B)
+    else if (isStruct(A))
+        isStruct(B)
+    else if (isDictEntry(A))
+        isDictEntry(B)
+    else if (isArray(A))
+        isArray(B)
+    else if (isVariant(A))
+        isVariant(B)
+    else if (isStaticArray(A))
+        isStaticArray(B)
+    else if (isStaticArrayEl(A))
+        isStaticArrayEl(B)
+    else
+        A == B;
 }
 
 /// Returns `true` if `T` is a D-Bus type defined in this file.
 fn isType(comptime T: type) bool {
     return switch (T) {
         Bool, UnixFd, Str, ObjectPath, Signature => true,
-
         else => @hasDecl(T, "__IS_ZBUS_TYPE__"),
     };
 }
@@ -367,77 +419,78 @@ fn signatureFromTypeInner(
         ObjectPath => return "o",
         Signature => return "g",
         else => {
-            if (isNum(T))
-                return switch (@FieldType(T, "num")) {
-                    u8 => "y",
-                    u16 => "q",
-                    u32 => "u",
-                    u64 => "t",
-                    i16 => "n",
-                    i32 => "i",
-                    i64 => "x",
-                    f64 => "d",
-                    else => @compileError("Invalid number type"),
-                };
+            if (isNum(T)) return switch (@FieldType(T, "num")) {
+                u8 => "y",
+                u16 => "q",
+                u32 => "u",
+                u64 => "t",
+                i16 => "n",
+                i32 => "i",
+                i64 => "x",
+                f64 => "d",
+                else => @compileError("Invalid number type"),
+            };
             if (isStruct(T)) {
-                const info = @typeInfo(@FieldType(T, "struct")).@"struct";
-
                 const nextStructDepth = structDepth + 1;
-
                 if (nextStructDepth > MAX_STRUCT_DEPTH)
                     @compileError("Reached max struct depth");
 
+                const info = @typeInfo(@FieldType(T, "struct")).@"struct";
+
                 var fieldsSignature: []const u8 = "";
                 for (info.field_types) |FieldType| {
-                    fieldsSignature += signatureFromTypeInner(
-                        FieldType,
-                        false,
-                        arrayDepth,
-                        nextStructDepth,
-                    );
+                    fieldsSignature += signatureFromTypeInner(FieldType, false, arrayDepth, nextStructDepth);
                 }
                 return "(" ++ fieldsSignature ++ ")";
             }
             if (isDictEntry(T)) {
                 if (!isParentArray)
-                    @compileError("`DictEntry` outside of `Array` isn't allowed");
+                    @compileError("`DictEntry` isn't allowed outside of `Array`");
 
                 const nextStructDepth = structDepth + 1;
-
                 if (nextStructDepth > MAX_STRUCT_DEPTH)
                     @compileError("Reached max struct depth");
 
-                const keySignature = signatureFromTypeInner(
-                    @FieldType(T, "key"),
-                    false,
-                    arrayDepth,
-                    nextStructDepth,
-                );
-                const valueSignature = signatureFromTypeInner(
-                    @FieldType(T, "value"),
-                    false,
-                    arrayDepth,
-                    nextStructDepth,
-                );
+                const KeyType = @FieldType(T, "key");
+                const keySignature = signatureFromTypeInner(KeyType, false, arrayDepth, nextStructDepth);
+
+                const ValueType = @FieldType(T, "value");
+                const valueSignature = signatureFromTypeInner(ValueType, false, arrayDepth, nextStructDepth);
 
                 return "{" ++ keySignature ++ valueSignature ++ "}";
             }
             if (isArray(T)) {
-                const info = @typeInfo(@FieldType(T, "array")).pointer;
-
                 const nextArrayDepth = arrayDepth + 1;
-
                 if (nextArrayDepth > MAX_ARRAY_DEPTH)
                     @compileError("Reached max array depth");
 
-                return "a" ++ signatureFromTypeInner(
-                    info.child,
-                    true,
-                    nextArrayDepth,
-                    structDepth,
-                );
+                const info = @typeInfo(@FieldType(T, "array")).pointer;
+                const ElType = info.child;
+
+                return "a" ++ signatureFromTypeInner(ElType, true, nextArrayDepth, structDepth);
             }
-            if (isVariant(T)) return "v";
+            if (isVariant(T) or isStaticVariant(T)) return "v";
+            if (isStaticArray(T)) {
+                const nextArrayDepth = arrayDepth + 1;
+                if (nextArrayDepth > MAX_ARRAY_DEPTH)
+                    @compileError("Reached max array depth");
+
+                const nextStructDepth = structDepth + 1;
+                if (nextStructDepth > MAX_STRUCT_DEPTH)
+                    @compileError("Reached max struct depth");
+
+                const ElKeyType = T.ElKeyType;
+                const key_signature = signatureFromTypeInner(ElKeyType, true, nextArrayDepth, nextStructDepth);
+
+                const ElValueType = T.ElValueType;
+                const value_signature = signatureFromTypeInner(ElValueType, true, nextArrayDepth, nextStructDepth);
+
+                return "a(" ++ key_signature ++ value_signature ++ ")";
+            }
+
+            if (isStaticArrayEl(T))
+                // `StaticArrayEl` is handled in the `StaticArray` logic
+                @compileError("`StaticArrayEl` isn't allowed outside of `StaticArray`");
 
             @compileError("Expected a D-Bus type, found " ++ @typeName(T));
         },
@@ -459,5 +512,6 @@ pub inline fn getAlignmentPadding(addr: usize, comptime alignment: u64) usize {
     // For `addr = 11` and `alignment = 8`:
     // 8 - (11 % 8) = 8 - 3 = 5
     // 11 + 5 = 16 -> Correct alignment
+
     return -addr & comptime (alignment - 1);
 }
