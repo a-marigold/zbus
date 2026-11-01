@@ -157,11 +157,7 @@ fn serializeValueInner(
                 try alignValue(writer, T, pos);
 
                 inline for (info.field_names) |field_name|
-                    try serializeValue(
-                        writer,
-                        @field(value.@"struct", field_name),
-                        endian,
-                    );
+                    try serializeValue(writer, @field(value.@"struct", field_name), endian, pos);
 
                 return;
             }
@@ -169,15 +165,15 @@ fn serializeValueInner(
             if (types.isDictEntry(T)) {
                 try alignValue(writer, T, pos);
 
-                try serializeValue(writer, value.key, endian);
-                try serializeValue(writer, value.value, endian);
+                try serializeValue(writer, value.key, endian, pos);
+                try serializeValue(writer, value.value, endian, pos);
 
                 return;
             }
             if (types.isArray(T)) {
                 try alignValue(writer, T, pos);
 
-                for (value.array) |el| try serializeValue(writer, el, endian);
+                for (value.array) |el| try serializeValue(writer, el, endian, pos);
 
                 return;
             }
@@ -193,14 +189,39 @@ fn serializeValueInner(
                     if (field_tag == tag) {
                         // `Variant` is encoded as `Signature` of
                         // the variant value, followed by that value
-                        const field_signature = types.Signature.init(types.signatureFromType(FieldType));
+                        const field_signature: types.Signature = .init(types.signatureFromType(FieldType));
 
-                        try serializeValue(writer, field_signature, endian);
-                        try serializeValue(writer, @field(value, field_name), endian);
+                        try serializeValue(writer, field_signature, endian, pos);
+                        try serializeValue(writer, @field(value, field_name), endian, pos);
                     }
                 }
 
                 return;
+            }
+
+            if (types.isStaticArray(T)) {
+                try alignValue(writer, T, pos);
+
+                const info = @typeInfo(@FieldType(T, "struct")).@"struct";
+
+                inline for (info.field_names) |field_name|
+                    try serializeValueInner(writer, @field(value, field_name), endian, pos);
+            }
+
+            if (types.isStaticArrayEl(T)) {
+                try alignValue(writer, T, pos);
+
+                try serializeValueInner(writer, types.getStaticArrayElKey(T), endian, pos);
+
+                try serializeValueInner(writer, value.el, endian, pos);
+            }
+
+            if (types.isStaticVariant(T)) {
+                const variant_signature: types.Signature =
+                    .init(types.signatureFromType(@FieldType(T, "variant")));
+
+                try serializeValueInner(writer, variant_signature, endian, pos);
+                try serializeValueInner(writer, value.variant, endian, pos);
             }
 
             @compileError("Expected a D-Bus type, found " ++ @typeName(T));
