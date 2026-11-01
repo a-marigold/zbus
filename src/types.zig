@@ -56,8 +56,7 @@ pub inline fn isNum(comptime T: type) type {
 pub const Bool = struct {
     bool: bool,
 
-    // `Bool` is encoded as `u32`,
-    // so the alignment is 4
+    // `Bool` is encoded as `u32`, so the alignment is 4
     pub const __ZBUS_ALIGNMENT__ = 4;
 
     pub inline fn init(@"bool": bool) @This() {
@@ -80,8 +79,7 @@ pub const UnixFd = struct {
 pub const Str = struct {
     str: [:0]const u8,
 
-    // Length of `Str` is encoded
-    // as `u32`, so the alignment is 4
+    // Length of `Str` is encoded `u32`, so the alignment is 4
     pub const __ZBUS_ALIGNMENT__ = 4;
 
     pub inline fn init(str: [:0]const u8) @This() {
@@ -92,8 +90,7 @@ pub const Str = struct {
 pub const ObjectPath = struct {
     path: [:0]const u8,
 
-    // Length of `ObjectPath` is encoded
-    // as `u32`, so the alignment is 4
+    // Length of `ObjectPath` is encoded as `u32`, so the alignment is 4
     pub const __ZBUS_ALIGNMENT__ = 4;
 
     pub inline fn init(path: [:0]const u8) @This() {
@@ -104,8 +101,7 @@ pub const ObjectPath = struct {
 pub const Signature = struct {
     signature: [:0]const u8,
 
-    // Length of `Signature` is `u8` and its content
-    // also consists of `u8`, so it doesn't require an alignment
+    // `Signature` doesn't require alignment 'cause it starts from `u8` (the length)
 
     pub inline fn init(signature: [:0]const u8) @This() {
         return .{ .signature = signature };
@@ -117,6 +113,9 @@ pub const Signature = struct {
 /// be serialized in the order of their definition in code.
 pub fn Struct(comptime T: type) type {
     const info = @typeInfo(T).@"struct";
+
+    if (info.field_types.len == 0) @compileError("`Struct` must have at least 1 field");
+
     inline for (info.field_types) |FieldType|
         if (!isType(FieldType)) @compileError("`Struct` must have only D-Bus types in fields");
 
@@ -147,7 +146,7 @@ pub inline fn isStruct(comptime T: type) bool {
 pub fn DictEntry(comptime K: type, comptime V: type) type {
     if (K != Str and K != ObjectPath and K != Signature and
         K != Bool and K != UnixFd and !isNum(K))
-        @compileError("Expected basic type of key, found " ++ @typeName(K));
+        @compileError("`DictEntry` key must be a basic type");
 
     if (!isType(V)) @compileError("Expected D-Bus type of value, found " ++ @typeName(V));
 
@@ -194,17 +193,13 @@ pub inline fn isArray(comptime T: type) bool {
 
 /// `U` is a union of D-Bus types.
 ///
-/// In D-Bus, variants can contain any other
-/// D-Bus type, including another `Variant`.
-/// But usually variants are limited by only several types.
-/// If the original D-Bus approach of variants is needed,
-/// `U` can just contain all the D-Bus types found in this file.
+/// `U` can contain any D-Bus types and
+/// may be limited only to a few types.
 ///
-/// Unions without tags (bare unions) aren't allowed.
+/// An error appears during parsing when parsed
+/// variant has type that doesn't match any of `U` types.
 pub fn Variant(comptime U: type) type {
     const info = @typeInfo(U).@"union";
-
-    if (info.tag_type == null) @compileError("Union of `Variant` must be tagged");
 
     inline for (info.field_types) |FieldType|
         if (!isType(FieldType)) @compileError("Union of `Variant` must have only D-bus types in fields");
