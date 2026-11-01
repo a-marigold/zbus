@@ -77,17 +77,21 @@ pub const Header = struct {
     ///
     /// Codes of fields are taken from https://dbus.freedesktop.org/doc/dbus-specification.html#message-protocol-messages.
     pub const Fields = types.StaticArray(struct {
-        object_path: ?types.StaticArrayEl(types.Num(u8).init(1), types.ObjectPath),
-        interface: ?types.StaticArrayEl(types.Num(u8).init(2), types.Str),
-        method: ?types.StaticArrayEl(types.Num(u8).init(3), types.Str),
-        error_name: ?types.StaticArrayEl(types.Num(u8).init(4), types.Str),
+        const FieldCode = types.Num(u8);
+
+        const StaticVariantStr = types.StaticVariant(types.Str);
+
+        object_path: ?types.StaticArrayEl(FieldCode.init(1), types.StaticVariant(types.ObjectPath)),
+        interface: ?types.StaticArrayEl(FieldCode.init(2), StaticVariantStr),
+        method: ?types.StaticArrayEl(FieldCode.init(3), StaticVariantStr),
+        error_name: ?types.StaticArrayEl(FieldCode.init(4), StaticVariantStr),
 
         /// Serial number of the message this message is a reply to.
-        reply_serial: ?types.StaticArrayEl(types.Num(u8).init(5), types.Num(u32)),
+        reply_serial: ?types.StaticArrayEl(FieldCode.init(5), types.StaticVariant(types.Num(u32))),
 
-        destination: ?types.StaticArrayEl(types.Num(u8).init(6), types.Str),
-        sender: ?types.StaticArrayEl(types.Num(u8).init(7), types.Str),
-        unix_fds: ?types.StaticArrayEl(types.Num(u8).init(9), types.Num(u32)),
+        destination: ?types.StaticArrayEl(FieldCode.init(6), StaticVariantStr),
+        sender: ?types.StaticArrayEl(FieldCode.init(7), StaticVariantStr),
+        unix_fds: ?types.StaticArrayEl(FieldCode.init(9), types.StaticVariant(types.Num(u32))),
     });
 };
 
