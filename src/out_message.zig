@@ -16,6 +16,8 @@ const ENDIAN = builtin.target.cpu.arch.endian();
 /// must have only this version in the header.
 pub const PROTOCOL_VERSION = 1;
 
+// TODO: count array amount of bytes
+
 /// If the message doesn't need a body, `Body` can be `null`.
 pub fn OutMessage(comptime message_type: message_types.MessageType, comptime Body: ?type) type {
     return struct {
@@ -97,12 +99,16 @@ pub const Header = struct {
 
 /// Recursively (for containers) serializes `value` and writes the result to `writer`.
 ///
-/// UTF-8 in strings isn't validated.
+/// - UTF-8 in strings isn't validated.
+/// - Structure of object paths isn't validated.
+///
+/// Returns the amount of written bytes.
 ///
 /// It is better to use the native `endian`.
-pub fn serializeValue(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian) Io.Writer.Error!void {
+pub fn serializeValue(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian) Io.Writer.Error!usize {
     return serializeValueInner(writer, value, endian, 0);
 }
+
 fn serializeValueInner(
     writer: *Io.Writer,
     value: anytype,
@@ -111,14 +117,12 @@ fn serializeValueInner(
     ///
     /// Used to align values.
     pos: usize,
-) Io.Writer.Error!void {
+) Io.Writer.Error!usize {
     const T = @TypeOf(value);
     switch (T) {
         types.Bool => return serializeBool(writer, value, endian, pos),
         types.UnixFd => return serializeUnixFd(writer, value, endian, pos),
-        types.Str => return serializeStr(writer, value, endian, pos),
-        types.ObjectPath => return serializeObjectPath(writer, value, endian, pos),
-        types.Signature => return serializeSignature(writer, value, pos),
+        types.Str, types.ObjectPath, types.Signature => return serializeStrLike(writer, value, endian, pos),
         else => {
             if (types.isNum(T)) return serializeNum(writer, value, endian, pos);
             if (types.isStruct(T)) return serializeStruct(writer, value, endian, pos);
@@ -138,7 +142,10 @@ inline fn serializeNum(writer: *Io.Writer, value: anytype, comptime endian: lang
     const T = @TypeOf(value);
     const NumType = @FieldType(T, "num");
 
-    if (NumType == u8) return writer.writeByte(value.num);
+    if (NumType == u8) {
+        try writer.writeByte(value.num);
+        return 1;
+    }
 
     const padding = try alignValue(writer, T, pos);
     try writer.writeInt(NumType, value.num, endian);
@@ -164,76 +171,73 @@ inline fn serializeUnixFd(writer: *Io.Writer, value: types.UnixFd, comptime endi
     return padding + @sizeOf(IndexType);
 }
 
-// TODO: `serializeStrLike`
+/// Serializes string-like value (`Str`, `ObjectPath` or `Signature`).
+inline fn serializeStrLike(writer: Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
+    const T = @TypeOf(value);
 
-inline fn serializeStr(writer: *Io.Writer, value: types.Str, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
+    const StrLenType = switch (T) {
+        types.Str, types.ObjectPath => u32,
+        types.Signature => u8,
+        else => @compileError("Expected `Str`, `ObjectPath` or `Signature`, found " ++ @typeName(T)),
+    };
+
     // Length of `Str` is encoded in `u32`
-    const len_size = @sizeOf(u32);
-
-    const padding = try alignValue(writer, types.Str, pos);
-
-    try writer.writeInt(u32, @intCast(value.str.len), endian);
-    try writer.writeAll(value.str);
-
-    return padding + len_size + value.str.len;
-}
-
-inline fn serializeObjectPath(writer: *Io.Writer, value: types.ObjectPath, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
-    // Length of `ObjectPath` is encoded in `u32`
-    const len_size = @sizeOf(u32);
-
-    const padding = try alignValue(writer, types.ObjectPath, pos);
-
-    try writer.writeInt(u32, @intCast(value.path.len), endian);
-    try writer.writeAll(value.path);
-
-    return padding + len_size + value.path.len;
-}
-
-inline fn serializeSignature(writer: *Io.Writer, value: types.Str) Io.Writer.Error!usize {
-    // `Signature` doesn't require alignment 'cause it starts from `u8` (the length)
-
-    const len_size = 1;
+    const str_len_size = @sizeOf(StrLenType);
     const null_terminator_size = 1;
 
-    try writer.writeByte(value.signature.len);
-    try writer.writeAll(value.signature);
+    const padding = switch (StrLenType) {
+        // `Signature` length is `u8`, so it doesn't require alignment
+        u8 => 0,
+        else => try alignValue(writer, StrLenType, pos),
+    };
 
-    return value.signature.len + comptime (len_size + null_terminator_size);
+    const str = switch (T) {
+        types.Str => value.str,
+        types.ObjectPath => value.path,
+        else => value.signature,
+    };
+
+    try writer.writeInt(u32, @intCast(str.len), endian);
+    try writer.writeAll(str);
+
+    return padding + str_len_size + str.len + null_terminator_size;
 }
 
 inline fn serializeStruct(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
     const T = @TypeOf(value);
     const info = @typeInfo(@FieldType(T, "struct")).@"struct";
 
-    const padding = try alignValue(writer, T, pos);
+    var new_pos = pos;
 
-    var struct_size: usize = padding;
+    new_pos += try alignValue(writer, T, new_pos);
+
     inline for (info.field_names) |field_name| {
-        struct_size += try serializeValue(writer, @field(value.@"struct", field_name), endian, pos);
+        const field = @field(value.@"struct", field_name);
+        new_pos += try serializeValue(writer, field, endian, new_pos);
     }
-    return struct_size;
+
+    return new_pos - pos;
 }
 
 inline fn serializeDictEntry(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
-    const padding = try alignValue(writer, @TypeOf(value), pos);
+    var new_pos = pos;
 
-    const key_size = try serializeValue(writer, value.key, endian, pos);
-    const value_size = try serializeValue(writer, value.value, endian, pos);
+    new_pos += try alignValue(writer, @TypeOf(value), new_pos);
 
-    return padding + key_size + value_size;
+    new_pos += try serializeValue(writer, value.key, endian, new_pos);
+    new_pos += try serializeValue(writer, value.value, endian, new_pos);
+
+    return new_pos - pos;
 }
 
 inline fn serializeArray(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
-    const padding = try alignValue(writer, @TypeOf(value), pos);
+    var new_pos = pos;
 
-    // TODO: count array bytes
-
-    var array_size: usize = padding;
+    new_pos += try alignValue(writer, @TypeOf(value), new_pos);
     for (value.array) |el| {
-        array_size += try serializeValue(writer, el, endian, pos);
+        new_pos += try serializeValue(writer, el, endian, new_pos);
     }
-    return array_size;
+    return new_pos - pos;
 }
 
 inline fn serializeVariant(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
@@ -249,12 +253,16 @@ inline fn serializeVariant(writer: *Io.Writer, value: anytype, comptime endian: 
         if (field_tag == tag) {
             // `Variant` is encoded as `Signature` of
             // the variant value, followed by that value
+
+            var new_pos = pos;
+
             const field_signature: types.Signature = .init(types.signatureFromType(FieldType));
+            new_pos += try serializeValue(writer, field_signature, endian, new_pos);
 
-            const signature_size = try serializeValue(writer, field_signature, endian, pos);
-            const value_size = try serializeValue(writer, @field(value, field_name), endian, pos);
+            const field_value = @field(value, field_name);
+            new_pos += try serializeValue(writer, field_value, endian, new_pos);
 
-            return signature_size + value_size;
+            return new_pos - pos;
         }
     }
 }
@@ -263,41 +271,46 @@ inline fn serializeStaticArray(writer: *Io.Writer, value: anytype, comptime endi
     const T = @TypeOf(value);
     const info = @typeInfo(@FieldType(T, "struct")).@"struct";
 
-    const padding = try alignValue(writer, T, pos);
+    var new_pos = pos;
 
-    var array_size: usize = padding;
+    new_pos += try alignValue(writer, T, new_pos);
+
     inline for (info.field_names) |field_name| {
-        array_size += try serializeValueInner(writer, @field(value, field_name), endian, pos);
+        new_pos += try serializeValueInner(writer, @field(value, field_name), endian, new_pos);
     }
-    return array_size;
+    return new_pos - pos;
 }
 
 inline fn serializeStaticArrayEl(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
     const T = @TypeOf(value);
 
-    const padding = try alignValue(writer, T, pos);
+    var new_pos = pos;
 
-    const key_size = try serializeValueInner(writer, types.getStaticArrayElKey(T), endian, pos);
-    const value_size = try serializeValueInner(writer, value.el, endian, pos);
+    new_pos += try alignValue(writer, T, new_pos);
 
-    return padding + key_size + value_size;
+    new_pos += try serializeValueInner(writer, types.getStaticArrayElKey(T), endian, new_pos);
+    new_pos += try serializeValueInner(writer, value.el, endian, new_pos);
+
+    return new_pos - pos;
 }
 
 inline fn serializeStaticVariant(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
     const VariantType = @FieldType(@TypeOf(value), "variant");
 
+    var new_pos = pos;
+
     const variant_signature: types.Signature = .init(types.signatureFromType(VariantType));
 
-    const signature_size = try serializeValueInner(writer, variant_signature, endian, pos);
-    const value_size = try serializeValueInner(writer, value.variant, endian, pos);
+    new_pos += try serializeValueInner(writer, variant_signature, endian, new_pos);
+    new_pos += try serializeValueInner(writer, value.variant, endian, new_pos);
 
-    return signature_size + value_size;
+    return new_pos - pos;
 }
 
 /// Writes required amount of alignment padding bytes to `writer` so
-/// a value of type `T` is aligned if written afterwards.
+/// a value of type `T` is aligned and can be written to `writer`.
 ///
-/// Returns amount of written bytes.
+/// Returns the amount of written bytes.
 ///
 /// Padding bytes are zeros in accordance with the spec.
 ///
