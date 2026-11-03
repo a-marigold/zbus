@@ -219,7 +219,7 @@ pub fn Variant(comptime U: type) type {
         // `Variant` is serialized as `Signature` of
         // the variant value, followed by that value.
         // Alignment of the value is handled independently
-        pub const __ZBUS_ALIGNMENT__ = getTypeAlignment(Signature);
+        pub const __ZBUS_ALIGNMENT__ = alignmentFromType(Signature);
 
         pub const __IS_ZBUS_TYPE__ = void;
         pub const __IS_ZBUS_VARIANT__ = void;
@@ -505,7 +505,7 @@ fn signatureFromTypeInner(
 /// Returns alignment of `T` defined in the D-Bus spec.
 ///
 /// It's always a power of two.
-pub fn getTypeAlignment(comptime T: type) comptime_int {
+pub fn alignmentFromType(comptime T: type) comptime_int {
     // TODO: alignmentFromType
     return @field(T, "__ZBUS_ALIGNMENT__");
 }

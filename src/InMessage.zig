@@ -185,14 +185,14 @@ pub const ParseValueError = error{
 ///   Garbage in padding doesn't break anything, but the spec says it's an error.
 ///
 /// If `T` isn't a D-Bus type, a compile error is shown.
-pub fn parseValue(comptime T: type, input: []align(types.getTypeAlignment(T)) const u8, endian: lang.Endian) ParseValueError!T {
+pub fn parseValue(comptime T: type, input: []align(types.alignmentFromType(T)) const u8, endian: lang.Endian) ParseValueError!T {
     const parsed_value = try parseValueInner(T, input, endian);
     return parsed_value.value;
 }
 
 fn parseValueInner(
     comptime T: type,
-    input: []align(types.getTypeAlignment(T)) const u8,
+    input: []align(types.alignmentFromType(T)) const u8,
     endian: lang.Endian,
 ) ParseValueError!ParseValueResult(T) {
     switch (T) {
@@ -216,7 +216,7 @@ fn parseValueInner(
 
 inline fn parseNum(
     comptime T: type,
-    input: []align(types.getTypeAlignment(T)) const u8,
+    input: []align(types.alignmentFromType(T)) const u8,
     endian: lang.Endian,
 ) ParseValueError!ParseValueResult(T) {
     const NumType = @FieldType(T, "num");
@@ -228,7 +228,7 @@ inline fn parseNum(
 }
 
 inline fn parseBool(
-    input: []align(types.getTypeAlignment(types.Bool)) const u8,
+    input: []align(types.alignmentFromType(types.Bool)) const u8,
     endian: lang.Endian,
 ) ParseValueError!ParseValueResult(types.Bool) {
     // `Bool` is encoded in `u32`
@@ -246,7 +246,7 @@ inline fn parseBool(
 }
 
 inline fn parseUnixFd(
-    input: []align(types.getTypeAlignment(types.UnixFd)) const u8,
+    input: []align(types.alignmentFromType(types.UnixFd)) const u8,
     endian: lang.Endian,
 ) ParseValueError!ParseValueResult(types.UnixFd) {
     const IndexType = @FieldType(types.UnixFd, "index");
@@ -262,7 +262,7 @@ inline fn parseUnixFd(
 /// Parses string-like type (`Str`, `ObjectPath` or `Signature`).
 inline fn parseStrLike(
     comptime T: type,
-    input: []align(types.getTypeAlignment(T)) const u8,
+    input: []align(types.alignmentFromType(T)) const u8,
     endian: lang.Endian,
 ) ParseValueError!ParseValueResult(T) {
     // Length of `Signature` is encoded in `u8`,
@@ -300,7 +300,7 @@ inline fn parseStrLike(
 
 inline fn parseStruct(
     comptime T: type,
-    input: []align(types.getTypeAlignment(T)) const u8,
+    input: []align(types.alignmentFromType(T)) const u8,
     endian: lang.Endian,
 ) ParseValueError!ParseValueResult(T) {
     const StructType = @FieldType(T, "struct");
@@ -338,7 +338,7 @@ inline fn parseStruct(
 
 inline fn parseDictEntry(
     comptime T: type,
-    input: []align(types.getTypeAlignment(T)) const u8,
+    input: []align(types.alignmentFromType(T)) const u8,
     endian: lang.Endian,
 ) ParseValueError!ParseValueResult(T) {
     const KeyType = @FieldType(T, "key");
@@ -362,7 +362,7 @@ inline fn parseDictEntry(
 
 inline fn parseVariant(
     comptime T: type,
-    input: []align(types.getTypeAlignment(T)) const u8,
+    input: []align(types.alignmentFromType(T)) const u8,
     endian: lang.Endian,
 ) ParseValueError!ParseValueResult(T) {
     const UnionType = @FieldType(T, "variant");
@@ -408,5 +408,5 @@ inline fn alignInput(input: []const u8, padding: usize) AlignInputError![]const 
 /// Returns alignment padding of type of value `V`
 /// to be added to `inputAddr` to get aligned input.
 inline fn getValuePadding(inputAddr: usize, comptime V: type) usize {
-    return types.getAlignmentPadding(inputAddr, types.getTypeAlignment(V));
+    return types.getAlignmentPadding(inputAddr, types.alignmentFromType(V));
 }

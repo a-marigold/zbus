@@ -48,9 +48,9 @@ pub fn OutMessage(comptime message_type: message_types.MessageType, comptime Bod
             inline for (.{ header.serial, header.bodySize }) |int|
                 try writer.writeInt(@TypeOf(int), int, ENDIAN);
 
-            try serializeValue(writer, Header.Fields, header.fields);
+            try serializeValue(writer, header.fields, ENDIAN);
 
-            if (Body) |BodyType| try serializeValue(writer, BodyType, self.body);
+            if (Body) try serializeValue(writer, self.body, ENDIAN);
         }
     };
 }
@@ -164,9 +164,9 @@ inline fn serializeBool(writer: *Io.Writer, value: types.Bool, comptime endian: 
 }
 
 inline fn serializeUnixFd(writer: *Io.Writer, value: types.UnixFd, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
-    const IndexType = @FieldType(types.UnixFd, "index");
-
     const padding = try alignValue(writer, types.UnixFd, pos);
+
+    const IndexType = @FieldType(types.UnixFd, "index");
     try writer.writeInt(IndexType, value.index, endian);
 
     return pos + padding + @sizeOf(IndexType);
@@ -194,7 +194,7 @@ inline fn serializeStrLike(writer: Io.Writer, value: anytype, comptime endian: l
     };
 
     const padding = switch (StrLenType) {
-        // `Signature` length is `u8`, so it doesn't require alignment
+        // Length of `Signature` is `u8`, so it doesn't require alignment
         u8 => 0,
         else => try alignValue(writer, StrLenType, pos),
     };
@@ -260,8 +260,8 @@ inline fn serializeVariant(writer: *Io.Writer, value: anytype, comptime endian: 
 
             var new_pos = pos;
 
-            const field_signature: types.Signature = .init(types.signatureFromType(FieldType));
-            new_pos = try serializeValueInner(writer, field_signature, endian, new_pos);
+            const field_signature: types.Signature = .init(comptime types.signatureFromType(FieldType));
+            new_pos = try serializeStrLike(writer, field_signature, endian, new_pos);
 
             const field_value = @field(value, field_name);
             new_pos = try serializeValueInner(writer, field_value, endian, new_pos);
@@ -302,9 +302,9 @@ inline fn serializeStaticVariant(writer: *Io.Writer, value: anytype, comptime en
 
     var new_pos = pos;
 
-    const variant_signature: types.Signature = .init(types.signatureFromType(VariantType));
+    const variant_signature: types.Signature = .init(comptime types.signatureFromType(VariantType));
 
-    new_pos = try serializeValueInner(writer, variant_signature, endian, new_pos);
+    new_pos = try serializeStrLike(writer, variant_signature, endian, new_pos);
     new_pos = try serializeValueInner(writer, value.variant, endian, new_pos);
 
     return new_pos;
@@ -319,7 +319,7 @@ inline fn serializeStaticVariant(writer: *Io.Writer, value: anytype, comptime en
 ///
 /// `pos` is the number of totally written bytes to `writer`.
 inline fn alignValue(writer: *Io.Writer, comptime T: type, pos: usize) Io.Writer.Error!void {
-    const padding = types.getAlignmentPadding(pos, types.getTypeAlignment(T));
+    const padding = types.getAlignmentPadding(pos, types.alignmentFromType(T));
 
     for (0..padding) |_| try writer.writeByte(0);
 
