@@ -77,6 +77,7 @@ pub const UnixFd = struct {
 };
 
 pub const Str = struct {
+    /// Length of string must fit `u32`.
     str: [:0]const u8,
 
     // Length of `Str` is encoded `u32`, so the alignment is 4
@@ -88,6 +89,7 @@ pub const Str = struct {
 };
 
 pub const ObjectPath = struct {
+    /// Length of path must fit `u32`.
     path: [:0]const u8,
 
     // Length of `ObjectPath` is encoded as `u32`, so the alignment is 4
@@ -99,15 +101,20 @@ pub const ObjectPath = struct {
 };
 
 pub const Signature = struct {
+    /// Length of path must fit `u8`,
+    /// that is, be no more than 255.
     signature: [:0]const u8,
 
     // `Signature` doesn't require alignment 'cause it starts from `u8` (the length)
+    pub const __ZBUS_ALIGNMENT__ = 1;
 
     pub inline fn init(signature: [:0]const u8) @This() {
         return .{ .signature = signature };
     }
 };
 /// Returns a D-Bus struct, created from zig's struct `T`.
+///
+/// `T` must have at least 1 field.
 ///
 /// It is guaranteed that fields of the struct will
 /// be serialized in the order of their definition in code.
@@ -191,7 +198,7 @@ pub inline fn isArray(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_ARRAY__");
 }
 
-/// `U` is a union of D-Bus types.
+/// `U` is a union of D-Bus types, necessarily tagged.
 ///
 /// `U` can contain any D-Bus types and
 /// may be limited only to a few types.
@@ -201,6 +208,8 @@ pub inline fn isArray(comptime T: type) bool {
 pub fn Variant(comptime U: type) type {
     const info = @typeInfo(U).@"union";
 
+    if (info.tag_type == null) @compileError("Union of `Variant` must be tagged");
+
     inline for (info.field_types) |FieldType|
         if (!isType(FieldType)) @compileError("Union of `Variant` must have only D-bus types in fields");
 
@@ -209,9 +218,8 @@ pub fn Variant(comptime U: type) type {
 
         // `Variant` is serialized as `Signature` of
         // the variant value, followed by that value.
-        // `Signature` doesn't require alignment,
-        // so `Variant` also doesn't.
         // Alignment of the value is handled independently
+        pub const __ZBUS_ALIGNMENT__ = getTypeAlignment(Signature);
 
         pub const __IS_ZBUS_TYPE__ = void;
         pub const __IS_ZBUS_VARIANT__ = void;
@@ -385,8 +393,8 @@ fn isType(comptime T: type) bool {
 }
 
 /// Returns `true` is `signature` matches type `T`.
-pub fn validateSignature(comptime T: type, signature: []const u8) bool {
-    return mem.eql(u8, signature, signatureFromType(T));
+pub inline fn validateSignature(comptime T: type, signature: []const u8) bool {
+    return mem.eql(u8, signature, comptime signatureFromType(T));
 }
 
 /// Returns a comptime string of the signature corresponding to `T`.
@@ -400,17 +408,12 @@ pub fn signatureFromType(comptime T: type) [:0]const u8 {
 }
 fn signatureFromTypeInner(
     comptime T: type,
-    /// `true` if the most previous parent type is an array.
-    ///
-    /// Used to detect dict entries outside
-    /// arrays (it's an error in the spec).
-    isParentArray: bool,
     /// Amount of parent `Array` of the current `T`.
-    arrayDepth: u64,
+    array_depth: u64,
     /// Amount of parent `Struct` of the current `T`.
     ///
     /// Also includes `DictEntry`.
-    structDepth: u64,
+    struct_depth: u64,
 ) [:0]const u8 {
     comptime switch (T) {
         Bool => return "b",
@@ -431,59 +434,61 @@ fn signatureFromTypeInner(
                 else => @compileError("Invalid number type"),
             };
             if (isStruct(T)) {
-                const nextStructDepth = structDepth + 1;
-                if (nextStructDepth > MAX_STRUCT_DEPTH)
+                const next_struct_depth = struct_depth + 1;
+                if (next_struct_depth > MAX_STRUCT_DEPTH)
                     @compileError("Reached max struct depth");
 
                 const info = @typeInfo(@FieldType(T, "struct")).@"struct";
 
-                var fieldsSignature: []const u8 = "";
+                var field_signatures: []const u8 = "";
                 for (info.field_types) |FieldType| {
-                    fieldsSignature += signatureFromTypeInner(FieldType, false, arrayDepth, nextStructDepth);
+                    field_signatures += signatureFromTypeInner(FieldType, array_depth, next_struct_depth);
                 }
-                return "(" ++ fieldsSignature ++ ")";
+                return "(" ++ field_signatures ++ ")";
             }
-            if (isDictEntry(T)) {
-                if (!isParentArray)
-                    @compileError("`DictEntry` isn't allowed outside of `Array`");
+            if (isDictEntry(T))
+                // `DictEntry` is handled in the `Array` logic
+                @compileError("`DictEntry` isn't allowed outside of `Array`");
 
-                const nextStructDepth = structDepth + 1;
-                if (nextStructDepth > MAX_STRUCT_DEPTH)
-                    @compileError("Reached max struct depth");
-
-                const KeyType = @FieldType(T, "key");
-                const keySignature = signatureFromTypeInner(KeyType, false, arrayDepth, nextStructDepth);
-
-                const ValueType = @FieldType(T, "value");
-                const valueSignature = signatureFromTypeInner(ValueType, false, arrayDepth, nextStructDepth);
-
-                return "{" ++ keySignature ++ valueSignature ++ "}";
-            }
             if (isArray(T)) {
-                const nextArrayDepth = arrayDepth + 1;
-                if (nextArrayDepth > MAX_ARRAY_DEPTH)
+                const next_array_depth = array_depth + 1;
+                if (next_array_depth > MAX_ARRAY_DEPTH)
                     @compileError("Reached max array depth");
 
                 const info = @typeInfo(@FieldType(T, "array")).pointer;
                 const ElType = info.child;
 
-                return "a" ++ signatureFromTypeInner(ElType, true, nextArrayDepth, structDepth);
+                if (isDictEntry(ElType)) {
+                    const next_struct_depth = struct_depth + 1;
+
+                    const KeyType = @FieldType(ElType, "key");
+                    const key_signature = signatureFromTypeInner(KeyType, next_array_depth, next_struct_depth);
+
+                    const ValueType = @FieldType(ElType, "value");
+                    const value_signature = signatureFromTypeInner(ValueType, next_array_depth, next_struct_depth);
+
+                    return "a{" ++ key_signature ++ value_signature ++ "}";
+                }
+
+                return "a" ++ signatureFromTypeInner(ElType, next_array_depth, struct_depth);
             }
+
             if (isVariant(T) or isStaticVariant(T)) return "v";
+
             if (isStaticArray(T)) {
-                const nextArrayDepth = arrayDepth + 1;
-                if (nextArrayDepth > MAX_ARRAY_DEPTH)
+                const next_array_depth = array_depth + 1;
+                if (next_array_depth > MAX_ARRAY_DEPTH)
                     @compileError("Reached max array depth");
 
-                const nextStructDepth = structDepth + 1;
-                if (nextStructDepth > MAX_STRUCT_DEPTH)
+                const next_struct_depth = struct_depth + 1;
+                if (next_struct_depth > MAX_STRUCT_DEPTH)
                     @compileError("Reached max struct depth");
 
                 const ElKeyType = T.ElKeyType;
-                const key_signature = signatureFromTypeInner(ElKeyType, true, nextArrayDepth, nextStructDepth);
+                const key_signature = signatureFromTypeInner(ElKeyType, next_array_depth, next_struct_depth);
 
                 const ElValueType = T.ElValueType;
-                const value_signature = signatureFromTypeInner(ElValueType, true, nextArrayDepth, nextStructDepth);
+                const value_signature = signatureFromTypeInner(ElValueType, next_array_depth, next_struct_depth);
 
                 return "a(" ++ key_signature ++ value_signature ++ ")";
             }
@@ -501,17 +506,19 @@ fn signatureFromTypeInner(
 ///
 /// It's always a power of two.
 pub fn getTypeAlignment(comptime T: type) comptime_int {
+    // TODO: alignmentFromType
     return @field(T, "__ZBUS_ALIGNMENT__");
 }
 
 /// Returns the amount of bytes that `addr` is missing to be aligned forward.
-pub inline fn getAlignmentPadding(addr: usize, comptime alignment: u64) usize {
+pub inline fn getAlignmentPadding(addr: usize, comptime alignment: usize) usize {
     // It's faster than `mem.alignForward(addr) - addr`
 
     // It's the same as `alignment - (addr % alignment)`.
     // For `addr = 11` and `alignment = 8`:
     // 8 - (11 % 8) = 8 - 3 = 5
     // 11 + 5 = 16 -> Correct alignment
-
     return -addr & comptime (alignment - 1);
 }
+
+// TODO: parse static `InArray` via lazy iterator instead of having a separate `StaticArray`
