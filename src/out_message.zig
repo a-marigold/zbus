@@ -92,7 +92,7 @@ pub const Header = struct {
         reply_serial: ?types.StaticArrayEl(FieldCode.init(5), types.StaticVariant(types.Num(u32))),
 
         destination: ?types.StaticArrayEl(FieldCode.init(6), StaticVariantStr),
-        sender: ?types.StaticArrayEl(FieldCode.init(7), StaticVariantStr),
+        sender: ?types.StaticArrayEl(FieldCode.init(7), StaticVariantStr), // TODO: delete
         unix_fds: ?types.StaticArrayEl(FieldCode.init(9), types.StaticVariant(types.Num(u32))),
     });
 };
@@ -235,9 +235,11 @@ inline fn serializeDictEntry(writer: *Io.Writer, value: anytype, comptime endian
 }
 
 inline fn serializeArray(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
+    const T = @TypeOf(value);
+
     var new_pos = pos;
 
-    new_pos += try alignValue(writer, @TypeOf(value), new_pos);
+    new_pos += try alignValue(writer, T, new_pos);
     for (value.array) |el| {
         new_pos = try serializeValueInner(writer, el, endian, new_pos);
     }
@@ -249,24 +251,19 @@ inline fn serializeVariant(writer: *Io.Writer, value: anytype, comptime endian: 
     const info = @typeInfo(@FieldType(T, "variant")).@"union";
 
     const TagType = info.tag_type.?;
-    const tag = @backingInt(value);
+    const active_tag = @backingInt(value);
 
     inline for (info.field_names, info.field_types) |field_name, FieldType| {
         const field_tag = @field(TagType, field_name);
 
-        if (field_tag == tag) {
-            // `Variant` is encoded as `Signature` of
-            // the variant value, followed by that value
-
-            var new_pos = pos;
-
-            const field_signature: types.Signature = .init(comptime types.signatureFromType(FieldType));
-            new_pos = try serializeStrLike(writer, field_signature, endian, new_pos);
-
+        if (field_tag == active_tag) {
             const field_value = @field(value, field_name);
-            new_pos = try serializeValueInner(writer, field_value, endian, new_pos);
-
-            return new_pos;
+            return serializeStaticVariant(
+                writer,
+                types.StaticVariant(FieldType).init(field_value),
+                endian,
+                pos,
+            );
         }
     }
 }
@@ -278,9 +275,9 @@ inline fn serializeStaticArray(writer: *Io.Writer, value: anytype, comptime endi
     var new_pos = pos;
 
     new_pos += try alignValue(writer, T, new_pos);
-    inline for (info.field_names) |field_name| {
-        new_pos = try serializeValueInner(writer, @field(value, field_name), endian, new_pos);
-    }
+    inline for (info.field_names) |field_name|
+        new_pos = try serializeStaticArrayEl(writer, @field(value, field_name), endian, new_pos);
+
     return new_pos;
 }
 
@@ -302,12 +299,97 @@ inline fn serializeStaticVariant(writer: *Io.Writer, value: anytype, comptime en
 
     var new_pos = pos;
 
-    const variant_signature: types.Signature = .init(comptime types.signatureFromType(VariantType));
+    // `Variant` is encoded as `Signature` of
+    // the variant value, followed by that value
+    const variant_signature: types.Signature = comptime .init(types.signatureFromType(VariantType));
 
     new_pos = try serializeStrLike(writer, variant_signature, endian, new_pos);
     new_pos = try serializeValueInner(writer, value.variant, endian, new_pos);
 
     return new_pos;
+}
+
+// TODO: library user should count size when `Array` type is created
+
+/// REturns the size of `value` in bytes.
+///
+/// Doesn't includes size of alignment
+/// padding before and after the value.
+///
+/// Includes alignment padding between elements of
+/// `Struct`, `DictEntry`, `Array`, and alignment of `Variant` value
+fn countValueSize(value: anytype) usize {
+    const T = @TypeOf(value);
+
+    return switch (T) {
+        // `Bool` is encoded in `u32`
+        types.Bool => @sizeOf(u32),
+
+        types.UnixFd => @sizeOf(@FieldType(types.UnixFd, "index")),
+        types.Str, types.ObjectPath, types.Signature => {
+            const null_terminator_size = 1;
+
+            const str = switch (T) {
+                types.Str => value.str,
+                types.ObjectPath => value.path,
+                else => value.signature,
+            };
+
+            const StrLenType = switch (T) {
+                types.Signature => u8,
+                else => u32,
+            };
+
+            return @sizeOf(StrLenType) + str.len + null_terminator_size;
+        },
+        else => {
+            if (types.isNum(T)) return @sizeOf(@FieldType(T, "num"));
+
+            if (types.isDictEntry(T))
+                return countValueSize(value.key) + countValueSize(value.value);
+
+            if (types.isStruct(T)) {
+                const info = @typeInfo(@FieldType(T, "struct")).@"struct";
+
+                var size: usize = 0;
+                inline for (info.field_types) |FieldType|
+                    size += countValueSize(FieldType);
+
+                return size;
+            }
+
+            if (types.isArray(T)) {
+                // TODO
+            }
+
+            if (types.isVariant(T)) {
+                const info = @typeInfo(@FieldType(T, "variant")).@"union";
+
+                const TagType = info.tag_type.?;
+                const active_tag = @backingInt(value);
+
+                inline for (info.field_names, info.field_types) |field_name, FieldType| {
+                    const field_tag = @field(TagType, field_name);
+
+                    if (field_tag == active_tag) {
+                        const field_value = @field(value, field_name);
+                        return countValueSize(types.StaticVariant(FieldType).init(field_value));
+                    }
+                }
+            }
+
+            if (types.isStaticVariant(T)) {
+                const VariantType = @FieldType(T, "variant");
+
+                // `Variant` is encoded as `Signature` of
+                // the variant value, followed by that value
+                const variant_signature: types.Signature =
+                    comptime .init(types.signatureFromType(VariantType));
+
+                return countValueSize(variant_signature) + countValueSize(value);
+            }
+        },
+    };
 }
 
 /// Writes required amount of alignment padding bytes to `writer` so
@@ -325,3 +407,6 @@ inline fn alignValue(writer: *Io.Writer, comptime T: type, pos: usize) Io.Writer
 
     return padding;
 }
+
+// TODO: move alignment logic in `serialize` to containers
+// TODO: `alignWriter(writer, padding)`
