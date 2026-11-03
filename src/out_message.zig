@@ -92,7 +92,6 @@ pub const Header = struct {
         reply_serial: ?types.StaticArrayEl(FieldCode.init(5), types.StaticVariant(types.Num(u32))),
 
         destination: ?types.StaticArrayEl(FieldCode.init(6), StaticVariantStr),
-        sender: ?types.StaticArrayEl(FieldCode.init(7), StaticVariantStr), // TODO: delete
         unix_fds: ?types.StaticArrayEl(FieldCode.init(9), types.StaticVariant(types.Num(u32))),
     });
 };
