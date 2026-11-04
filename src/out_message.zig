@@ -237,14 +237,24 @@ inline fn serializeOutArray(writer: *Io.Writer, value: anytype, comptime endian:
 
     var new_pos = pos;
 
-    // The first el is already aligned by `Array` alignment
-    new_pos = try serializeValueInner(writer, value.array[0], endian, new_pos);
+    // Size of Array is encoded in `u32`
+    try writer.writeInt(u32, @intCast(value.size), endian);
+    new_pos += @sizeOf(u32);
 
-    for (value.array[1..]) |el| {
-        const el_padding = try alignValue(writer, ElType, new_pos);
+    var el_index: usize = 0;
+    while (true) : (el_index += 1) {
+        // In accordance with the spec, there must be alignment of
+        // the first value after Array size even if there is no elements.
+        // So, do `while(true)` with at least 1 `alignValue`
+        const el_padding = try alignValue(writer, ElType, pos);
         new_pos += el_padding;
-        new_pos = try serializeValueInner(writer, el, endian, new_pos);
+
+        if (el_index == value.array.len) break;
+
+        const el = value.array[el_index];
+        new_pos = try serializeValueInner(writer, el, endian, pos);
     }
+
     return new_pos;
 }
 
@@ -318,10 +328,10 @@ inline fn serializeStaticVariant(writer: *Io.Writer, value: anytype, comptime en
     return new_pos;
 }
 
-// TODO: library user should count size when `Array` type is created
-
 /// Counts the size in bytes of an `OutArray`.
 pub inline fn countOutArraySize(out_array: anytype) usize {
+    // TODO: optimize for static types
+
     var size: usize = 0;
     for (out_array.array) |el|
         size += countValueSize(el);
@@ -329,13 +339,12 @@ pub inline fn countOutArraySize(out_array: anytype) usize {
     return size;
 }
 
-/// REturns the size of `value` in bytes.
+/// Returns the size of `value` in bytes.
 ///
-/// Doesn't includes size of alignment
-/// padding before and after the value.
+/// Doesn't include size of alignment padding before and after the value.
 ///
 /// Includes alignment padding between elements of
-/// `Struct`, `DictEntry`, `Array`, and alignment of `Variant` value
+/// `Struct`, `DictEntry`, `Array`, and alignment of `Variant` value.
 fn countValueSize(value: anytype) usize {
     const T = @TypeOf(value);
 
