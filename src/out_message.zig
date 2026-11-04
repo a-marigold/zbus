@@ -329,30 +329,52 @@ inline fn serializeStaticVariant(writer: *Io.Writer, value: anytype, comptime en
 }
 
 /// Counts the size in bytes of an `OutArray`.
+///
+/// Doesn't include size of alignment padding before and after array elements.
+///
+/// Includes size of padding between array elements.
 pub inline fn countOutArraySize(out_array: anytype) usize {
-    // TODO: optimize for static types
+    const ElType = @typeInfo(@FieldType(out_array, "array")).pointer.child;
 
-    var size: usize = 0;
-    for (out_array.array) |el|
-        size += countValueSize(el);
+    // Fast path for types with static size
+    switch (ElType) {
+        types.Bool => {
+            // `Bool` is encoded in `u32`
+            const bool_size = @sizeOf(u32);
+            return bool_size * out_array.array.len;
+        },
+        types.UnixFd => {
+            const index_size = @sizeOf(@FieldType(ElType, "index"));
+            return index_size * out_array.array.len;
+        },
+        else => {
+            if (types.isNum(ElType)) {
+                const num_size = @sizeOf(@FieldType(ElType, "num"));
+                return num_size * out_array.array.len;
+            }
 
-    return size;
+            // Slow path for types with dynamic size
+            var size: usize = 0;
+            for (out_array.array) |el|
+                size += countDynamicValueSize(el);
+
+            return size;
+        },
+    }
 }
 
 /// Returns the size of `value` in bytes.
+///
+/// Used for types with dynamic sizes that aren't known at comptime.
 ///
 /// Doesn't include size of alignment padding before and after the value.
 ///
 /// Includes alignment padding between elements of
 /// `Struct`, `DictEntry`, `Array`, and alignment of `Variant` value.
-fn countValueSize(value: anytype) usize {
+fn countDynamicValueSize(value: anytype) usize {
     const T = @TypeOf(value);
 
     return switch (T) {
-        // `Bool` is encoded in `u32`
-        types.Bool => @sizeOf(u32),
-
-        types.UnixFd => @sizeOf(@FieldType(types.UnixFd, "index")),
         types.Str, types.ObjectPath, types.Signature => {
             const null_terminator_size = 1;
 
@@ -369,26 +391,20 @@ fn countValueSize(value: anytype) usize {
 
             return @sizeOf(StrLenType) + str.len + null_terminator_size;
         },
-
         types.InArray => @compileError("Cannot use `InArray` in `OutMessage`"),
         else => {
-            if (types.isNum(T)) return @sizeOf(@FieldType(T, "num"));
-
             if (types.isDictEntry(T))
-                return countValueSize(value.key) + countValueSize(value.value);
-
+                return countDynamicValueSize(value.key) + countDynamicValueSize(value.value);
             if (types.isStruct(T)) {
                 const info = @typeInfo(@FieldType(T, "struct")).@"struct";
 
                 var size: usize = 0;
                 inline for (info.field_types) |FieldType|
-                    size += countValueSize(FieldType);
+                    size += countDynamicValueSize(FieldType);
 
                 return size;
             }
-
             if (types.isOutArray(T)) return value.size;
-
             if (types.isVariant(T)) {
                 const info = @typeInfo(@FieldType(T, "variant")).@"union";
 
@@ -400,11 +416,10 @@ fn countValueSize(value: anytype) usize {
 
                     if (field_tag == active_tag) {
                         const field_value = @field(value, field_name);
-                        return countValueSize(types.StaticVariant(FieldType).init(field_value));
+                        return countDynamicValueSize(types.StaticVariant(FieldType).init(field_value));
                     }
                 }
             }
-
             if (types.isStaticVariant(T)) {
                 const VariantType = @FieldType(T, "variant");
 
@@ -413,8 +428,10 @@ fn countValueSize(value: anytype) usize {
                 const variant_signature: types.Signature =
                     comptime .init(types.signatureFromType(VariantType));
 
-                return countValueSize(variant_signature) + countValueSize(value);
+                return countDynamicValueSize(variant_signature) + countDynamicValueSize(value);
             }
+
+            @compileError("Expected a D-Bus type with dynamic size, found " ++ @typeName(T));
         },
     };
 }
