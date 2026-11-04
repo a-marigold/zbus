@@ -204,6 +204,7 @@ fn parseValueInner(
             if (types.isStruct(T)) return parseStruct(T, input, endian);
             if (types.isDictEntry(T)) return parseDictEntry(T, input, endian);
             if (types.isVariant(T)) return parseStrLike(T, input, endian);
+            if (types.isOutArray(T)) @compileError("Cannot use `OutArray` in `InMessage`");
             // if (types.isStaticArray(T)) return parseStaticArray(T,input, endian);
             // if (types.isStaticArrayEl(T))
             //     // It's handled in `parseStaticArray`
@@ -310,8 +311,8 @@ inline fn parseStruct(
 
     var remaining_input = input;
 
-    inline for (info.field_names, info.field_types, 0..) |field_name, FieldType, field_index| {
-        const field_padding = switch (field_index) {
+    inline for (info.field_names, info.field_types, 0..) |field_name, FieldType, index| {
+        const field_padding = switch (index) {
             // The first field is already aligned by `Struct` alignment
             0 => 0,
 

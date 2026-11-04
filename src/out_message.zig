@@ -10,13 +10,12 @@ const message_types = @import("message_types.zig");
 
 const ENDIAN = builtin.target.cpu.arch.endian();
 
+// TODO: Move protocol version
 /// The current D-Bus protocol version.
 ///
 /// All incoming and outcoming messages
 /// must have only this version in the header.
 pub const PROTOCOL_VERSION = 1;
-
-// TODO: count array amount of bytes
 
 /// If the message doesn't need a body, `Body` can be `null`.
 pub fn OutMessage(comptime message_type: message_types.MessageType, comptime Body: ?type) type {
@@ -127,11 +126,12 @@ fn serializeValueInner(
         types.Bool => return serializeBool(writer, value, endian, pos),
         types.UnixFd => return serializeUnixFd(writer, value, endian, pos),
         types.Str, types.ObjectPath, types.Signature => return serializeStrLike(writer, value, endian, pos),
+        types.InArray => @compileError("Cannot use `InArray` in `OutMessage`"),
         else => {
             if (types.isNum(T)) return serializeNum(writer, value, endian, pos);
             if (types.isStruct(T)) return serializeStruct(writer, value, endian, pos);
             if (types.isDictEntry(T)) return serializeDictEntry(writer, value, endian, pos);
-            if (types.isArray(T)) return serializeArray(writer, value, endian, pos);
+            if (types.isOutArray(T)) return serializeOutArray(writer, value, endian, pos);
             if (types.isVariant(T)) return serializeVariant(writer, value, endian, pos);
             if (types.isStaticArray(T)) return serializeStaticArray(writer, value, endian, pos);
             if (types.isStaticArrayEl(T)) return serializeStaticArrayEl(writer, value, endian, pos);
@@ -238,7 +238,7 @@ inline fn serializeDictEntry(writer: *Io.Writer, value: anytype, comptime endian
     return new_pos;
 }
 
-inline fn serializeArray(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
+inline fn serializeOutArray(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
     const T = @TypeOf(value);
     const ElType = @typeInfo(@FieldType(T, "array")).pointer.child;
 
@@ -358,6 +358,8 @@ fn countValueSize(value: anytype) usize {
 
             return @sizeOf(StrLenType) + str.len + null_terminator_size;
         },
+
+        types.InArray => @compileError("Cannot use `InArray` in `OutMessage`"),
         else => {
             if (types.isNum(T)) return @sizeOf(@FieldType(T, "num"));
 
@@ -374,9 +376,7 @@ fn countValueSize(value: anytype) usize {
                 return size;
             }
 
-            if (types.isArray(T)) {
-                // TODO
-            }
+            if (types.isOutArray(T)) return value.size;
 
             if (types.isVariant(T)) {
                 const info = @typeInfo(@FieldType(T, "variant")).@"union";

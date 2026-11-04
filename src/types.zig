@@ -198,6 +198,53 @@ pub inline fn isArray(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_ARRAY__");
 }
 
+/// Array recived from an `InMessage`.
+///
+/// To iterate over it, use `InArrayIterator`.
+///
+/// Distinction between `InArray` and `OutArray`
+/// is made to avoid allocations for `InArray`
+/// and have various lazy iterators over it instead.
+pub const InArray = struct {
+    data: []const u8,
+
+    // Length of `Array` is encoded in `u32`,
+    // so the alignment is 4.
+    // Alignment of elements is handled independently
+    pub const __ZBUS_ALIGNMENT__ = 4;
+
+    pub inline fn init(data: []const u8) @This() {
+        return .{ .data = data };
+    }
+};
+
+/// Array to be sent in an `OutMessage`.
+///
+/// To count `size`, use `countOutArraySize`.
+pub fn OutArray(comptime E: type) type {
+    if (!isType(E)) @compileError("`OutArray` element must be of a D-Bus type");
+
+    return struct {
+        array: []const E,
+        size: usize,
+
+        // Length of `Array` is encoded as `u32`,
+        // so the alignment is 4.
+        // Alignment of elements is handled independently
+        pub const __ZBUS_ALIGNMENT__ = 4;
+
+        pub const __IS_ZBUS_TYPE__ = void;
+        pub const __IS_ZBUS_OUT_ARRAY__ = void;
+
+        pub inline fn init(array: []const E, size: usize) @This() {
+            return .{ .array = array, .size = size };
+        }
+    };
+}
+pub inline fn isOutArray(comptime T: type) bool {
+    return @hasDecl(T, "__IS_ZBUS_OUT_ARRAY__");
+}
+
 /// `U` is a union of D-Bus types, necessarily tagged.
 ///
 /// `U` can contain any D-Bus types and
@@ -295,6 +342,8 @@ pub fn StaticArray(comptime T: type) type {
 pub fn isStaticArray(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_STATIC_ARRAY__");
 }
+
+// TODO: inline `is*` functions
 
 /// `key` is a comptime value of D-Bus type, used to
 /// recognize element during `StaticArray` serialization or parsing.
@@ -506,7 +555,6 @@ fn signatureFromTypeInner(
 ///
 /// It's always a power of two.
 pub fn alignmentFromType(comptime T: type) comptime_int {
-    // TODO: alignmentFromType
     return @field(T, "__ZBUS_ALIGNMENT__");
 }
 
