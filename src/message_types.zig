@@ -1,5 +1,11 @@
 //! Types used by both `InMessage` and `OutMessage`.
 
+/// The current D-Bus protocol version.
+///
+/// All incoming and outcoming messages
+/// must have only this version in the header.
+pub const PROTOCOL_VERSION = 1;
+
 pub const MessageType = enum(u8) {
     MethodCall = 1,
     MethodReturn = 2,

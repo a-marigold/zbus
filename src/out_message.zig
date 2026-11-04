@@ -10,55 +10,10 @@ const message_types = @import("message_types.zig");
 
 const ENDIAN = builtin.target.cpu.arch.endian();
 
-// TODO: Move protocol version
-/// The current D-Bus protocol version.
-///
-/// All incoming and outcoming messages
-/// must have only this version in the header.
-pub const PROTOCOL_VERSION = 1;
-
-/// If the message doesn't need a body, `Body` can be `null`.
-pub fn OutMessage(comptime message_type: message_types.MessageType, comptime Body: ?type) type {
-    return struct {
-        header: Header,
-        body: if (Body) |BodyType| BodyType else @TypeOf(null),
-
-        pub const TYPE = message_type;
-
-        /// Serializes the message into bytes as per
-        /// the specification and writes the result to `writer`.
-        ///
-        /// UTF-8 in strings isn't validated.
-        pub fn serialize(self: *@This(), writer: *Io.Writer) !void {
-            const header = self.header;
-
-            const serialized_endian: u8 = switch (ENDIAN) {
-                .little => 'l',
-                .big => 'B',
-            };
-
-            inline for (.{
-                serialized_endian,
-                @backingInt(header.message_type),
-                header.flags,
-                PROTOCOL_VERSION,
-            }) |byte| try writer.writeByte(byte);
-
-            inline for (.{ header.serial, header.bodySize }) |int|
-                try writer.writeInt(@TypeOf(int), int, ENDIAN);
-
-            try alignWriter(writer, 8); // TODO: replace `8` with a constant
-            try serializeValue(writer, header.fields, ENDIAN);
-
-            if (Body != null) try serializeValue(writer, self.body, ENDIAN);
-        }
-    };
-}
-
 /// Doesn't contain all the fields from the spec.
 ///
 /// Instead, some fields are computed automatically during serialization.
-pub const Header = struct {
+const Header = struct {
     /// Type of the message.
     message_type: message_types.MessageType,
 
@@ -95,6 +50,44 @@ pub const Header = struct {
         unix_fds: ?types.StaticArrayEl(FieldCode.init(9), types.StaticVariant(types.Num(u32))),
     });
 };
+
+/// If the message doesn't need a body, `Body` can be `null`.
+pub fn OutMessage(comptime message_type: message_types.MessageType, comptime Body: ?type) type {
+    return struct {
+        header: Header,
+        body: if (Body) |BodyType| BodyType else @TypeOf(null),
+
+        pub const TYPE = message_type;
+
+        /// Serializes the message into bytes as per
+        /// the specification and writes the result to `writer`.
+        ///
+        /// UTF-8 in strings isn't validated.
+        pub fn serialize(self: *@This(), writer: *Io.Writer) !void {
+            const header = self.header;
+
+            const serialized_endian: u8 = switch (ENDIAN) {
+                .little => 'l',
+                .big => 'B',
+            };
+
+            inline for (.{
+                serialized_endian,
+                @backingInt(header.message_type),
+                header.flags,
+                message_types.PROTOCOL_VERSION,
+            }) |byte| try writer.writeByte(byte);
+
+            inline for (.{ header.serial, header.bodySize }) |int|
+                try writer.writeInt(@TypeOf(int), int, ENDIAN);
+
+            try alignWriter(writer, 8); // TODO: replace `8` with a constant
+            try serializeValue(writer, header.fields, ENDIAN);
+
+            if (Body != null) try serializeValue(writer, self.body, ENDIAN);
+        }
+    };
+}
 
 /// Recursively (for containers) serializes `value` and writes the result to `writer`.
 ///
