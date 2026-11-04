@@ -327,6 +327,15 @@ inline fn serializeStaticVariant(writer: *Io.Writer, value: anytype, comptime en
 
 // TODO: library user should count size when `Array` type is created
 
+/// Counts the size in bytes of an `OutArray`.
+pub inline fn countOutArraySize(out_array: anytype) usize {
+    var size: usize = 0;
+    for (out_array.array) |el|
+        size += countValueSize(el);
+
+    return size;
+}
+
 /// REturns the size of `value` in bytes.
 ///
 /// Doesn't includes size of alignment
