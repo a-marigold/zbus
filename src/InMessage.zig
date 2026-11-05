@@ -1,10 +1,5 @@
 //! Incoming (unsolicited) message.
 
-// TODO:
-// Store a fixed array containing slices of arrays in input and quantity of their elements
-// (expected amount of arrays in the whole message is known at compile time)
-// Preallocate and parse arrays in a single pass
-
 const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
@@ -199,6 +194,7 @@ fn parseValueInner(
         types.Bool => return parseBool(input, endian),
         types.UnixFd => return parseUnixFd(input, endian),
         types.Str, types.ObjectPath, types.Signature => return parseStrLike(T, input, endian),
+        types.InArray => return parseInArray(T, input, endian),
         else => {
             if (types.isNum(T)) return parseNum(T, input, endian);
             if (types.isStruct(T)) return parseStruct(T, input, endian);
@@ -232,7 +228,7 @@ inline fn parseBool(
     input: []align(types.alignmentFromType(types.Bool)) const u8,
     endian: lang.Endian,
 ) ParseValueError!ParseValueResult(types.Bool) {
-    // `Bool` is encoded in `u32`
+    // `Bool` is encoded as `u32`
     const bool_size = @sizeOf(u32);
 
     if (input.len < bool_size) return ParseValueError.UnexpectedEnd;
@@ -266,7 +262,7 @@ inline fn parseStrLike(
     input: []align(types.alignmentFromType(T)) const u8,
     endian: lang.Endian,
 ) ParseValueError!ParseValueResult(T) {
-    // Length of `Signature` is encoded in `u8`,
+    // Length of `Signature` is encoded as `u8`,
     // lengths of `Str` and `ObjectPath` are in `u32`
     const StrLenType = switch (T) {
         types.Str, types.ObjectPath => u32,
@@ -280,7 +276,7 @@ inline fn parseStrLike(
     const min_str_size = str_len_size + null_terminator_size;
     if (min_str_size > input.len) return ParseValueError.UnexpectedEnd;
 
-    const content_len: StrLenType = switch (StrLenType) {
+    const content_len: usize = switch (StrLenType) {
         u8 => input[0],
         else => mem.readInt(StrLenType, input[0..str_len_size], endian),
     };
@@ -292,7 +288,7 @@ inline fn parseStrLike(
     const full_str = remaining_input[0..full_str_len];
 
     // Check null terminator
-    if (full_str[full_str_len - 1] != 0) return ParseValueError.InvalidValue;
+    if (full_str[content_len] != 0) return ParseValueError.InvalidValue;
 
     const str = full_str[0..content_len :0];
 
@@ -361,6 +357,34 @@ inline fn parseDictEntry(
     };
 }
 
+inline fn parseInArray(
+    comptime T: type,
+    input: []align(types.alignmentFromType(T)) const u8,
+    endian: lang.Endian,
+) ParseValueError!ParseValueResult(T) {
+    const ElType = @typeInfo(T).array.child;
+
+    const ArrayLenType = u32;
+    const array_len_size = @sizeOf(ArrayLenType);
+
+    if (array_len_size > input.len) return ParseValueError.UnexpectedEnd;
+
+    const array_len = mem.readInt(ArrayLenType, input[0..array_len_size], endian);
+
+    var remaining_input = input[array_len_size..];
+
+    const first_el_padding = getValuePadding(input.ptr, ElType);
+    if (first_el_padding < remaining_input.len) return ParseValueError.UnexpectedEnd;
+
+    remaining_input = remaining_input[first_el_padding];
+
+    if (array_len > remaining_input.len) return ParseValueError.TooLongArray;
+
+    const array_data = remaining_input[0..array_len];
+
+    return .{ .value = .init(array_data), .size = 0 };
+}
+
 inline fn parseVariant(
     comptime T: type,
     input: []align(types.alignmentFromType(T)) const u8,
@@ -408,6 +432,6 @@ inline fn alignInput(input: []const u8, padding: usize) AlignInputError![]const 
 
 /// Returns alignment padding of type of value `V`
 /// to be added to `inputAddr` to get aligned input.
-inline fn getValuePadding(inputAddr: usize, comptime V: type) usize {
-    return types.getAlignmentPadding(inputAddr, types.alignmentFromType(V));
+inline fn getValuePadding(input_addr: usize, comptime V: type) usize {
+    return types.getAlignmentPadding(input_addr, types.alignmentFromType(V));
 }
