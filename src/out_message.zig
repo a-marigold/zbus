@@ -52,12 +52,10 @@ const Header = struct {
 };
 
 /// If the message doesn't need a body, `Body` can be `null`.
-pub fn OutMessage(comptime message_type: message_types.MessageType, comptime Body: ?type) type {
+pub fn OutMessage(comptime Body: ?type) type {
     return struct {
         header: Header,
         body: if (Body) |BodyType| BodyType else @TypeOf(null),
-
-        pub const TYPE = message_type;
 
         /// Serializes the message into bytes as per
         /// the specification and writes the result to `writer`.
@@ -96,14 +94,14 @@ pub fn OutMessage(comptime message_type: message_types.MessageType, comptime Bod
 ///
 /// Returns the amount of written bytes.
 ///
-/// It is better to use the native `endian`.
+/// It's better to use the native `endian`.
 pub fn serializeValue(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian) Io.Writer.Error!usize {
     return serializeValueInner(writer, value, endian, 0);
 }
 
-/// `writer` position must be already aligned by `value` alignment.
+/// `writer.pos` must be already aligned by `value` alignment.
 ///
-/// Doesn't return the amount of written bytes.
+/// Doesn't return the amount of written value bytes.
 /// Instead, returns new, updated `pos`.
 fn serializeValueInner(
     writer: *Io.Writer,
@@ -135,8 +133,7 @@ fn serializeValueInner(
     }
 }
 
-// Serialization functions assume that
-// `writer is already aligned by `value` alignment.
+// Serialization functions assume that `writer` is already aligned by `value` alignment.
 // They return new, updated `pos` instead of the size of `value`
 
 inline fn serializeNum(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
@@ -179,7 +176,6 @@ inline fn serializeStrLike(writer: Io.Writer, value: anytype, comptime endian: l
     };
 
     const str_len_size = @sizeOf(StrLenType);
-    const null_terminator_size = 1;
 
     const str = switch (T) {
         types.Str => value.str,
@@ -191,9 +187,11 @@ inline fn serializeStrLike(writer: Io.Writer, value: anytype, comptime endian: l
         u8 => try writer.writeByte(@intCast(str.len)),
         else => try writer.writeInt(StrLenType, @intCast(str.len), endian),
     }
-    try writer.writeAll(str);
 
-    return pos + str_len_size + str.len + null_terminator_size;
+    const full_str = mem.absorbSentinel(str);
+    try writer.writeAll(full_str);
+
+    return pos + str_len_size + full_str.len;
 }
 
 inline fn serializeStruct(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
@@ -330,7 +328,8 @@ inline fn serializeStaticVariant(writer: *Io.Writer, value: anytype, comptime en
 
 /// Counts the size in bytes of an `OutArray`.
 ///
-/// Doesn't include size of alignment padding before and after array elements.
+/// Doesn't include size of alignment padding
+/// before the first element and after the last element.
 ///
 /// Includes size of padding between array elements.
 pub inline fn countOutArraySize(out_array: anytype) usize {
@@ -391,7 +390,6 @@ fn countDynamicValueSize(value: anytype) usize {
 
             return @sizeOf(StrLenType) + str.len + null_terminator_size;
         },
-        types.InArray => @compileError("Cannot use `InArray` in `OutMessage`"),
         else => {
             if (types.isDictEntry(T))
                 return countDynamicValueSize(value.key) + countDynamicValueSize(value.value);
