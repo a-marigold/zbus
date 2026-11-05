@@ -48,18 +48,18 @@ const Header = struct {
 
         const StaticVariantStr = types.StaticVariant(types.Str);
 
-        object_path: ?types.StaticArrayEl(FieldCode.init(1), types.StaticVariant(types.ObjectPath)),
-        interface: ?types.StaticArrayEl(FieldCode.init(2), StaticVariantStr),
-        method: ?types.StaticArrayEl(FieldCode.init(3), StaticVariantStr),
-        error_name: ?types.StaticArrayEl(FieldCode.init(4), StaticVariantStr),
+        object_path: ?types.StaticArrayElem(FieldCode.init(1), types.StaticVariant(types.ObjectPath)),
+        interface: ?types.StaticArrayElem(FieldCode.init(2), StaticVariantStr),
+        method: ?types.StaticArrayElem(FieldCode.init(3), StaticVariantStr),
+        error_name: ?types.StaticArrayElem(FieldCode.init(4), StaticVariantStr),
 
         /// Serial number of the message this message is a reply to.
-        reply_serial: ?types.StaticArrayEl(FieldCode.init(5), types.StaticVariant(types.Num(u32))),
+        reply_serial: ?types.StaticArrayElem(FieldCode.init(5), types.StaticVariant(types.Num(u32))),
 
-        destination: ?types.StaticArrayEl(FieldCode.init(6), StaticVariantStr),
-        sender: ?types.StaticArrayEl(FieldCode.init(7), StaticVariantStr),
-        body_signature: ?types.StaticArrayEl(FieldCode.init(8), types.StaticVariant(types.Signature)),
-        unix_fds: ?types.StaticArrayEl(FieldCode.init(9), types.StaticVariant(types.Num(u32))),
+        destination: ?types.StaticArrayElem(FieldCode.init(6), StaticVariantStr),
+        sender: ?types.StaticArrayElem(FieldCode.init(7), StaticVariantStr),
+        body_signature: ?types.StaticArrayElem(FieldCode.init(8), types.StaticVariant(types.Signature)),
+        unix_fds: ?types.StaticArrayElem(FieldCode.init(9), types.StaticVariant(types.Num(u32))),
     });
 };
 
@@ -362,7 +362,7 @@ inline fn parseInArray(
     input: []align(types.alignmentFromType(T)) const u8,
     endian: lang.Endian,
 ) ParseValueError!ParseValueResult(T) {
-    const ElType = @typeInfo(T).array.child;
+    const ElemType = @typeInfo(T).array.child;
 
     const ArrayLenType = u32;
     const array_len_size = @sizeOf(ArrayLenType);
@@ -373,7 +373,7 @@ inline fn parseInArray(
 
     var remaining_input = input[array_len_size..];
 
-    const first_el_padding = getValuePadding(input.ptr, ElType);
+    const first_el_padding = getValuePadding(input.ptr, ElemType);
     if (first_el_padding < remaining_input.len) return ParseValueError.UnexpectedEnd;
 
     remaining_input = remaining_input[first_el_padding];

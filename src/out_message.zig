@@ -38,16 +38,16 @@ const Header = struct {
 
         const StaticVariantStr = types.StaticVariant(types.Str);
 
-        object_path: ?types.StaticArrayEl(FieldCode.init(1), types.StaticVariant(types.ObjectPath)),
-        interface: ?types.StaticArrayEl(FieldCode.init(2), StaticVariantStr),
-        method: ?types.StaticArrayEl(FieldCode.init(3), StaticVariantStr),
-        error_name: ?types.StaticArrayEl(FieldCode.init(4), StaticVariantStr),
+        object_path: ?types.StaticArrayElem(FieldCode.init(1), types.StaticVariant(types.ObjectPath)),
+        interface: ?types.StaticArrayElem(FieldCode.init(2), StaticVariantStr),
+        method: ?types.StaticArrayElem(FieldCode.init(3), StaticVariantStr),
+        error_name: ?types.StaticArrayElem(FieldCode.init(4), StaticVariantStr),
 
         /// Serial number of the message this message is a reply to.
-        reply_serial: ?types.StaticArrayEl(FieldCode.init(5), types.StaticVariant(types.Num(u32))),
+        reply_serial: ?types.StaticArrayElem(FieldCode.init(5), types.StaticVariant(types.Num(u32))),
 
-        destination: ?types.StaticArrayEl(FieldCode.init(6), StaticVariantStr),
-        unix_fds: ?types.StaticArrayEl(FieldCode.init(9), types.StaticVariant(types.Num(u32))),
+        destination: ?types.StaticArrayElem(FieldCode.init(6), StaticVariantStr),
+        unix_fds: ?types.StaticArrayElem(FieldCode.init(9), types.StaticVariant(types.Num(u32))),
     });
 };
 
@@ -125,7 +125,7 @@ fn serializeValueInner(
             if (types.isOutArray(T)) return serializeOutArray(writer, value, endian, pos);
             if (types.isVariant(T)) return serializeVariant(writer, value, endian, pos);
             if (types.isStaticArray(T)) return serializeStaticArray(writer, value, endian, pos);
-            if (types.isStaticArrayEl(T)) return serializeStaticArrayEl(writer, value, endian, pos);
+            if (types.isStaticArrayElem(T)) return serializeStaticArrayElem(writer, value, endian, pos);
             if (types.isStaticVariant(T)) return serializeStaticVariant(writer, value, endian, pos);
 
             @compileError("Expected a D-Bus type, found " ++ @typeName(T));
@@ -167,7 +167,7 @@ inline fn serializeUnixFd(writer: *Io.Writer, value: types.UnixFd, comptime endi
 inline fn serializeStrLike(writer: Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
     const T = @TypeOf(value);
 
-    // Length of `Signature` is encoded in `u8`,
+    // Length of `Signature` is encoded as `u8`,
     // lengths of `Str` and `ObjectPath` are in `u32`
     const StrLenType = switch (T) {
         types.Str, types.ObjectPath => u32,
@@ -231,11 +231,11 @@ inline fn serializeDictEntry(writer: *Io.Writer, value: anytype, comptime endian
 
 inline fn serializeOutArray(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
     const T = @TypeOf(value);
-    const ElType = @typeInfo(@FieldType(T, "array")).pointer.child;
+    const ElemTypeType = @typeInfo(@FieldType(T, "array")).pointer.child;
 
     var new_pos = pos;
 
-    // Size of Array is encoded in `u32`
+    // Size of Array is encoded as `u32`
     try writer.writeInt(u32, @intCast(value.size), endian);
     new_pos += @sizeOf(u32);
 
@@ -244,7 +244,7 @@ inline fn serializeOutArray(writer: *Io.Writer, value: anytype, comptime endian:
         // In accordance with the spec, there must be alignment of
         // the first value after Array size even if there is no elements.
         // So, do `while(true)` with at least 1 `alignValue`
-        const el_padding = try alignValue(writer, ElType, pos);
+        const el_padding = try alignValue(writer, ElemTypeType, pos);
         new_pos += el_padding;
 
         if (el_index == value.array.len) break;
@@ -286,19 +286,19 @@ inline fn serializeStaticArray(writer: *Io.Writer, value: anytype, comptime endi
         new_pos += el_padding;
 
         const el_value = @field(value.@"struct", field_name);
-        new_pos = try serializeStaticArrayEl(writer, el_value, endian, new_pos);
+        new_pos = try serializeStaticArrayElem(writer, el_value, endian, new_pos);
     }
 
     return new_pos;
 }
 
-inline fn serializeStaticArrayEl(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
+inline fn serializeStaticArrayElem(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
     const T = @TypeOf(value);
 
     var new_pos = pos;
 
-    // Key is already aligned by `StaticArrayEl` alignment
-    new_pos = try serializeValueInner(writer, types.getStaticArrayElKey(T), endian, new_pos);
+    // Key is already aligned by `StaticArrayElem` alignment
+    new_pos = try serializeValueInner(writer, types.getStaticArrayElemKey(T), endian, new_pos);
 
     const value_padding = try alignValue(writer, @FieldType(value, "el"), new_pos);
     new_pos += value_padding;
@@ -338,7 +338,7 @@ pub inline fn countOutArraySize(out_array: anytype) usize {
     // Fast path for types with static size
     switch (ElType) {
         types.Bool => {
-            // `Bool` is encoded in `u32`
+            // `Bool` is encoded as `u32`
             const bool_size = @sizeOf(u32);
             return bool_size * out_array.array.len;
         },

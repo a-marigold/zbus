@@ -1,4 +1,4 @@
-//! Types used by both `InMessage` and `OutMessage`.
+//! Types and constants used by both `InMessage` and `OutMessage`.
 
 /// The current D-Bus protocol version.
 ///

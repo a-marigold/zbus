@@ -50,7 +50,7 @@ pub fn init(io: Io, bus_path: []const u8, options: Options) InitError!@This() {
 
     // Send hello message and the broker
     // will assign an unique ID for this connection
-    const hello_message: OutMessage(.MethodCall, null) = .{
+    const hello_message: OutMessage(null) = .{
         .header = .{
             .flags = 0,
             .serial = 1,
@@ -58,6 +58,7 @@ pub fn init(io: Io, bus_path: []const u8, options: Options) InitError!@This() {
                 .object_path = .init(.init("/org/freedesktop/DBus")),
                 .interface = .init(.init("org.freedesktop.DBus")),
                 .method = .init(.init("Hello")),
+                .destination = .init(.init("")),
             }),
         },
         .body = null,
@@ -74,7 +75,7 @@ pub fn init(io: Io, bus_path: []const u8, options: Options) InitError!@This() {
         .writer = writer,
     };
 }
-const Options = struct {
+pub const Options = struct {
     /// Whether to allow passing UNIX fds over the connection.
     comptime is_negotiate_unix_fd: bool = false,
 
@@ -87,7 +88,7 @@ const AuthError = error{ AuthExternalFail, NegotiateUnixFdFail };
 /// is `true`, sets up file descriptors negotiation.
 ///
 /// `reader` and `writer` are the socket reader and writer.
-fn authentificate(reader: *Io.Reader, writer: *Io.Writer, comptime is_negotiate_unix_fd: bool) AuthError!void {
+inline fn authentificate(reader: *Io.Reader, writer: *Io.Writer, comptime is_negotiate_unix_fd: bool) AuthError!void {
     // Credentials passing as per the protocol
     writer.writeByte(0) catch return AuthError.AuthExternalFail;
     writer.flush() catch return AuthError.AuthExternalFail;

@@ -9,6 +9,8 @@
 
 // TODO: variants depth validation
 
+// TODO: use std.meta instead of manual type info extraction
+
 const std = @import("std");
 const mem = std.mem;
 
@@ -174,7 +176,7 @@ pub inline fn isDictEntry(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_DICT_ENTRY__");
 }
 
-/// Array recived from an `InMessage`.
+/// Array received from an `InMessage`.
 ///
 /// To iterate over it, use `InArrayIterator`.
 ///
@@ -182,18 +184,18 @@ pub inline fn isDictEntry(comptime T: type) bool {
 /// is made to avoid allocations for `InArray`
 /// and have various lazy iterators over it instead.
 pub const InArray = struct {
-    data: []const u8,
+    elems: []const u8,
 
-    // Length of `Array` is encoded in `u32`,
+    // Length of `Array` is encoded as `u32`,
     // so the alignment is 4.
     // Alignment of elements is handled independently
     pub const __ZBUS_ALIGNMENT__ = 4;
 
-    pub inline fn init(data: []const u8) @This() {
-        return .{ .data = data };
+    pub inline fn init(elems: []const u8) @This() {
+        return .{ .elems = elems };
     }
 };
-
+// TODO: replace `el` with `elem`
 /// Array to be sent in an `OutMessage`.
 pub fn OutArray(comptime E: type) type {
     if (!isType(E)) @compileError("`OutArray` element must be of a D-Bus type");
@@ -265,8 +267,8 @@ pub inline fn isVariant(comptime T: type) bool {
 
 /// Not an official D-Bus type. Under the hood, it maps to valid D-Bus array of structs.
 ///
-/// `T` is a struct with `StaticArrayEl` in fields.
-/// `StaticArrayEl` must have the same type in their keys and values.
+/// `T` is a struct with `StaticArrayElem` in fields.
+/// `StaticArrayElem` must have the same type in their keys and values.
 /// E.g, only `Num` in key and only `StaticVariant` for all elements.
 ///
 /// Fields of `T` can be optional.
@@ -282,32 +284,32 @@ pub inline fn isVariant(comptime T: type) bool {
 pub fn StaticArray(comptime T: type) type {
     const info = @typeInfo(T).@"struct";
 
-    const FirstElKeyType = info.field_types[0].KeyType;
-    const FirstElValueType = @FieldType(info.field_types[0], "el");
+    const FirstElemKeyType = info.field_types[0].KeyType;
+    const FirstElemValueType = @FieldType(info.field_types[0], "el");
 
-    inline for (info.field_types) |ElType| {
-        const el_info = @typeInfo(ElType);
+    inline for (info.field_types) |ElemType| {
+        const el_info = @typeInfo(ElemType);
 
-        const is_static_array_el = switch (el_info) {
-            .optional => |optional| isStaticArrayEl(optional.child),
-            else => isStaticArrayEl(ElType),
+        const is_static_array_elem = switch (el_info) {
+            .optional => |optional| isStaticArrayElem(optional.child),
+            else => isStaticArrayElem(ElemType),
         };
-        if (!is_static_array_el) @compileError("Expected `StaticArrayEl`, found " ++ @typeName(T));
+        if (!is_static_array_elem) @compileError("Expected `StaticArrayEl`, found " ++ @typeName(T));
 
-        const ElKeyType = ElType.KeyType;
-        if (!eqlTypes(ElKeyType, FirstElKeyType))
+        const ElemKeyType = ElemType.KeyType;
+        if (!eqlTypes(ElemKeyType, FirstElemKeyType))
             @compileError("Types of keys must be the same");
 
-        const ElValueType = @FieldType(ElType, "el");
-        if (!eqlTypes(ElValueType, FirstElValueType))
+        const ElemValueType = @FieldType(ElemType, "el");
+        if (!eqlTypes(ElemValueType, FirstElemValueType))
             @compileError("Types of elements must be the same");
     }
 
     return struct {
         @"struct": T,
 
-        pub const ElKeyType = FirstElKeyType;
-        pub const ElValueType = FirstElValueType;
+        pub const ElemKeyType = FirstElemKeyType;
+        pub const ElemValueType = FirstElemValueType;
 
         // Length of `Array` is encoded as `u32`,
         // so the alignment is 4.
@@ -334,10 +336,10 @@ pub fn isStaticArray(comptime T: type) bool {
 /// `V` is type of value of the key-value pair.
 ///
 /// The same as `Struct` key-value pair, but the key is static.
-pub fn StaticArrayEl(comptime key: anytype, comptime V: type) type {
-    const ElKeyType = @TypeOf(key);
-    if (!isType(ElKeyType))
-        @compileError("Expected a D-Bus type of key, found " ++ ElKeyType);
+pub fn StaticArrayElem(comptime key: anytype, comptime V: type) type {
+    const ElemKeyType = @TypeOf(key);
+    if (!isType(ElemKeyType))
+        @compileError("Expected a D-Bus type of key, found " ++ @typeName(ElemKeyType));
 
     if (!isType(V))
         @compileError("Expected a D-Bus type `V`, found " ++ @typeName(V));
@@ -345,25 +347,25 @@ pub fn StaticArrayEl(comptime key: anytype, comptime V: type) type {
     return struct {
         el: V,
 
-        pub const KeyType = ElKeyType;
-        pub const __ZBUS_EL_KEY__ = key;
+        pub const KeyType = ElemKeyType;
+        pub const __ZBUS_ELEM_KEY__ = key;
 
         // The same as alignment of `Struct`
         pub const ALIGNMENT = 8;
 
         pub const __IS_ZBUS_TYPE__ = void;
-        pub const __IS_ZBUS_STATIC_ARRAY_EL__ = void;
+        pub const __IS_ZBUS_STATIC_ARRAY_ELEM__ = void;
 
         pub inline fn init(el: V) @This() {
             return .{ .el = el };
         }
     };
 }
-pub fn isStaticArrayEl(comptime T: type) bool {
-    return @hasDecl(T, "__IS_ZBUS_STATIC_ARRAY_EL__");
+pub fn isStaticArrayElem(comptime T: type) bool {
+    return @hasDecl(T, "__IS_ZBUS_STATIC_ARRAY_ELEM__");
 }
-/// Returns the comptime key of `StaticArrayEl`.
-pub fn getStaticArrayElKey(comptime T: type) T.KeyType {
+/// Returns the comptime key of `StaticArrayElem`.
+pub fn getStaticArrayElemKey(comptime T: type) T.KeyType {
     return T.__ZBUS_EL_KEY__;
 }
 
@@ -410,8 +412,8 @@ fn eqlTypes(comptime A: type, comptime B: type) bool {
         isVariant(B)
     else if (isStaticArray(A))
         isStaticArray(B)
-    else if (isStaticArrayEl(A))
-        isStaticArrayEl(B)
+    else if (isStaticArrayElem(A))
+        isStaticArrayElem(B)
     else
         A == B;
 }
@@ -488,21 +490,21 @@ fn signatureFromTypeInner(
                     @compileError("Reached max array depth");
 
                 const info = @typeInfo(@FieldType(T, "array")).pointer;
-                const ElType = info.child;
+                const ElemType = info.child;
 
-                if (isDictEntry(ElType)) {
+                if (isDictEntry(ElemType)) {
                     const next_struct_depth = struct_depth + 1;
 
-                    const KeyType = @FieldType(ElType, "key");
+                    const KeyType = @FieldType(ElemType, "key");
                     const key_signature = signatureFromTypeInner(KeyType, next_array_depth, next_struct_depth);
 
-                    const ValueType = @FieldType(ElType, "value");
+                    const ValueType = @FieldType(ElemType, "value");
                     const value_signature = signatureFromTypeInner(ValueType, next_array_depth, next_struct_depth);
 
                     return "a{" ++ key_signature ++ value_signature ++ "}";
                 }
 
-                return "a" ++ signatureFromTypeInner(ElType, next_array_depth, struct_depth);
+                return "a" ++ signatureFromTypeInner(ElemType, next_array_depth, struct_depth);
             }
 
             if (isVariant(T) or isStaticVariant(T)) return "v";
@@ -516,18 +518,18 @@ fn signatureFromTypeInner(
                 if (next_struct_depth > MAX_STRUCT_DEPTH)
                     @compileError("Reached max struct depth");
 
-                const ElKeyType = T.ElKeyType;
-                const key_signature = signatureFromTypeInner(ElKeyType, next_array_depth, next_struct_depth);
+                const ElemKeyType = T.ElKeyType;
+                const key_signature = signatureFromTypeInner(ElemKeyType, next_array_depth, next_struct_depth);
 
-                const ElValueType = T.ElValueType;
-                const value_signature = signatureFromTypeInner(ElValueType, next_array_depth, next_struct_depth);
+                const ElemValueType = T.ElValueType;
+                const value_signature = signatureFromTypeInner(ElemValueType, next_array_depth, next_struct_depth);
 
                 return "a(" ++ key_signature ++ value_signature ++ ")";
             }
 
-            if (isStaticArrayEl(T))
-                // `StaticArrayEl` is handled in the `StaticArray` logic
-                @compileError("`StaticArrayEl` isn't allowed outside of `StaticArray`");
+            if (isStaticArrayElem(T))
+                // `StaticArrayElem` is handled in the `StaticArray` logic
+                @compileError("`StaticArrayElem` isn't allowed outside of `StaticArray`");
 
             @compileError("Expected a D-Bus type, found " ++ @typeName(T));
         },
