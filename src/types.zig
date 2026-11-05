@@ -14,6 +14,17 @@
 const std = @import("std");
 const mem = std.mem;
 
+const MIBIBYTE_SIZE = 1_048_576;
+
+/// Value is taken from the spec:
+///
+/// https://dbus.freedesktop.org/doc/dbus-specification.html#basic-types
+const STR_LEN_LIMIT = 64 * MIBIBYTE_SIZE;
+
+/// Length of `Signature` is encoded as `u8`,
+/// so it can be no more than 255.
+const SIGNATURE_LEN_LIMIT = 255;
+
 /// Value is taken from the spec:
 ///
 /// https://dbus.freedesktop.org/doc/dbus-specification.html#basic-types
@@ -79,38 +90,47 @@ pub const UnixFd = struct {
 };
 
 pub const Str = struct {
-    /// Length of string must fit `u32`.
+    /// Length of str must fit 64 MiB.
     str: [:0]const u8,
 
     // Length of `Str` is encoded `u32`, so the alignment is 4
     pub const __ZBUS_ALIGNMENT__ = 4;
 
-    pub inline fn init(str: [:0]const u8) @This() {
+    pub const InitError = error{TooLongStr};
+    pub inline fn init(str: [:0]const u8) InitError!@This() {
+        if (str.len > STR_LEN_LIMIT) return;
+
         return .{ .str = str };
     }
 };
 
 pub const ObjectPath = struct {
-    /// Length of path must fit `u32`.
+    /// Length of path must fit 64 MiB.
     path: [:0]const u8,
 
     // Length of `ObjectPath` is encoded as `u32`, so the alignment is 4
     pub const __ZBUS_ALIGNMENT__ = 4;
 
-    pub inline fn init(path: [:0]const u8) @This() {
+    pub const InitError = error{TooLongPath};
+    pub inline fn init(path: [:0]const u8) InitError!@This() {
+        if (path.len > STR_LEN_LIMIT) return InitError.TooLongPath;
+
         return .{ .path = path };
     }
 };
 
 pub const Signature = struct {
     /// Length of path must fit `u8`,
-    /// that is, be no more than 255.
+    /// that is, be no more than 255 bytes.
     signature: [:0]const u8,
 
     // `Signature` doesn't require alignment 'cause it starts from `u8` (the length)
     pub const __ZBUS_ALIGNMENT__ = 1;
 
+    pub const InitError = error{TooLongSignature};
     pub inline fn init(signature: [:0]const u8) @This() {
+        if (signature.len > SIGNATURE_LEN_LIMIT) return InitError.TooLongSignature;
+
         return .{ .signature = signature };
     }
 };
