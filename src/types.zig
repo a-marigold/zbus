@@ -174,30 +174,6 @@ pub inline fn isDictEntry(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_DICT_ENTRY__");
 }
 
-/// Returns a D-Bus array with element type `E`.
-pub fn Array(comptime E: type) type {
-    if (!isType(E)) @compileError("`Array` must have only D-Bus element type");
-
-    return struct {
-        array: []const E,
-
-        // Length of `Array` is encoded as `u32`,
-        // so the alignment is 4.
-        // Alignment of elements is handled independently
-        pub const __ZBUS_ALIGNMENT__ = 4;
-
-        pub const __IS_ZBUS_TYPE__ = void;
-        pub const __IS_ZBUS_ARRAY__ = void;
-
-        pub inline fn init(array: []const E) @This() {
-            return .{ .array = array };
-        }
-    };
-}
-pub inline fn isArray(comptime T: type) bool {
-    return @hasDecl(T, "__IS_ZBUS_ARRAY__");
-}
-
 /// Array recived from an `InMessage`.
 ///
 /// To iterate over it, use `InArrayIterator`.
@@ -219,13 +195,20 @@ pub const InArray = struct {
 };
 
 /// Array to be sent in an `OutMessage`.
-///
-/// To count `size`, use `countOutArraySize`.
 pub fn OutArray(comptime E: type) type {
     if (!isType(E)) @compileError("`OutArray` element must be of a D-Bus type");
 
     return struct {
         array: []const E,
+
+        /// Size of array in bytes.
+        ///
+        /// Doesn't include size of alignment padding
+        /// before and after array elements.
+        ///
+        /// Includes size of padding between array elements.
+        ///
+        /// See - `countOutArraySize`.
         size: usize,
 
         // Length of `Array` is encoded as `u32`,
@@ -421,8 +404,8 @@ fn eqlTypes(comptime A: type, comptime B: type) bool {
         isStruct(B)
     else if (isDictEntry(A))
         isDictEntry(B)
-    else if (isArray(A))
-        isArray(B)
+    else if (isOutArray(A))
+        isOutArray(B)
     else if (isVariant(A))
         isVariant(B)
     else if (isStaticArray(A))
@@ -499,7 +482,7 @@ fn signatureFromTypeInner(
                 // `DictEntry` is handled in the `Array` logic
                 @compileError("`DictEntry` isn't allowed outside of `Array`");
 
-            if (isArray(T)) {
+            if (isOutArray(T)) {
                 const next_array_depth = array_depth + 1;
                 if (next_array_depth > MAX_ARRAY_DEPTH)
                     @compileError("Reached max array depth");
