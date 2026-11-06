@@ -18,12 +18,17 @@ const MIBIBYTE_SIZE = 1_048_576;
 
 /// Value is taken from the spec:
 ///
-/// https://dbus.freedesktop.org/doc/dbus-specification.html#basic-types
-const STR_LEN_LIMIT = 64 * MIBIBYTE_SIZE;
+/// https://dbus.freedesktop.org/doc/dbus-specification.html#id-1.4.5
+const MAX_ARRAY_SIZE = 64 * MIBIBYTE_SIZE;
+
+/// Value is taken from the spec:
+///
+/// https://dbus.freedesktop.org/doc/dbus-specification.html#id-1.4.5
+const MAX_STR_LEN = MAX_ARRAY_SIZE;
 
 /// Length of `Signature` is encoded as `u8`,
 /// so it can be no more than 255.
-const SIGNATURE_LEN_LIMIT = 255;
+const MAX_SIGNATURE_LEN = 255;
 
 /// Value is taken from the spec:
 ///
@@ -91,6 +96,7 @@ pub const UnixFd = struct {
 
 pub const Str = struct {
     /// Length of str must fit 64 MiB.
+    /// For larger strings, `init` returns an error.
     str: [:0]const u8,
 
     // Length of `Str` is encoded `u32`, so the alignment is 4
@@ -98,7 +104,7 @@ pub const Str = struct {
 
     pub const InitError = error{TooLongStr};
     pub inline fn init(str: [:0]const u8) InitError!@This() {
-        if (str.len > STR_LEN_LIMIT) return;
+        if (str.len > MAX_STR_LEN) return;
 
         return .{ .str = str };
     }
@@ -106,6 +112,7 @@ pub const Str = struct {
 
 pub const ObjectPath = struct {
     /// Length of path must fit 64 MiB.
+    /// For larger patgs, `init` returns an error.
     path: [:0]const u8,
 
     // Length of `ObjectPath` is encoded as `u32`, so the alignment is 4
@@ -113,23 +120,22 @@ pub const ObjectPath = struct {
 
     pub const InitError = error{TooLongPath};
     pub inline fn init(path: [:0]const u8) InitError!@This() {
-        if (path.len > STR_LEN_LIMIT) return InitError.TooLongPath;
+        if (path.len > MAX_STR_LEN) return InitError.TooLongPath;
 
         return .{ .path = path };
     }
 };
 
 pub const Signature = struct {
-    /// Length of path must fit `u8`,
-    /// that is, be no more than 255 bytes.
+    /// Length of it must fit `u8`, that is, be no more than 255 bytes.
     signature: [:0]const u8,
 
     // `Signature` doesn't require alignment 'cause it starts from `u8` (the length)
     pub const __ZBUS_ALIGNMENT__ = 1;
 
     pub const InitError = error{TooLongSignature};
-    pub inline fn init(signature: [:0]const u8) @This() {
-        if (signature.len > SIGNATURE_LEN_LIMIT) return InitError.TooLongSignature;
+    pub inline fn init(signature: [:0]const u8) InitError!@This() {
+        if (signature.len > MAX_SIGNATURE_LEN) return InitError.TooLongSignature;
 
         return .{ .signature = signature };
     }
@@ -173,9 +179,7 @@ pub inline fn isStruct(comptime T: type) bool {
 /// Dict entries must only be array elements, and if
 /// one isn't in an array, serialization fails at comptime.
 pub fn DictEntry(comptime K: type, comptime V: type) type {
-    if (K != Str and K != ObjectPath and K != Signature and
-        K != Bool and K != UnixFd and !isNum(K))
-        @compileError("`DictEntry` key must be a basic type");
+    if (!isBasicType(K)) @compileError("`DictEntry` key must be a basic type");
 
     if (!isType(V)) @compileError("Expected D-Bus type of value, found " ++ @typeName(V));
 
@@ -202,8 +206,9 @@ pub inline fn isDictEntry(comptime T: type) bool {
 ///
 /// Distinction between `InArray` and `OutArray`
 /// is made to avoid allocations for `InArray`
-/// and have various lazy iterators over it instead.
+/// and to have various lazy iterators over it instead.
 pub const InArray = struct {
+    /// Length of it must fit 64 MiB.
     elems: []const u8,
 
     // Length of `Array` is encoded as `u32`,
@@ -211,7 +216,10 @@ pub const InArray = struct {
     // Alignment of elements is handled independently
     pub const __ZBUS_ALIGNMENT__ = 4;
 
-    pub inline fn init(elems: []const u8) @This() {
+    pub const InitError = error{TooLongArray};
+    pub inline fn init(elems: []const u8) InitError!@This() {
+        if (elems.len > MAX_ARRAY_SIZE) return InitError.TooLongArray;
+
         return .{ .elems = elems };
     }
 };
@@ -223,11 +231,12 @@ pub fn OutArray(comptime E: type) type {
     return struct {
         array: []const E,
 
-        /// Size of array in bytes.
+        /// Size of array in bytes, including length of strings.
+        ///
+        /// Must fit 64 MiB. For larger sizes, `init` returns an error.
         ///
         /// Doesn't include size of alignment padding
-        /// before and after array elements.
-        ///
+        /// before and after all array elements.
         /// Includes size of padding between array elements.
         ///
         /// See - `countOutArraySize`.
@@ -241,7 +250,10 @@ pub fn OutArray(comptime E: type) type {
         pub const __IS_ZBUS_TYPE__ = void;
         pub const __IS_ZBUS_OUT_ARRAY__ = void;
 
-        pub inline fn init(array: []const E, size: usize) @This() {
+        pub const InitError = error{TooLongArray};
+        pub inline fn init(array: []const E, size: usize) InitError!@This() {
+            if (size > MAX_ARRAY_SIZE) return InitError.TooLongArray;
+
             return .{ .array = array, .size = size };
         }
     };
@@ -443,6 +455,16 @@ fn isType(comptime T: type) bool {
     return switch (T) {
         Bool, UnixFd, Str, ObjectPath, Signature => true,
         else => @hasDecl(T, "__IS_ZBUS_TYPE__"),
+    };
+}
+
+/// Returns `true` if `T` is a basic D-Bus type:
+///
+/// `Num`, `Bool`, `UnixFd`, `Str`, `ObjectPath` or `Signature`.
+fn isBasicType(comptime T: type) bool {
+    return switch (T) {
+        Bool, UnixFd, Str, ObjectPath, Signature => true,
+        else => isNum(T),
     };
 }
 
