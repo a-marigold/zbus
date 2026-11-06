@@ -332,30 +332,30 @@ inline fn serializeStaticVariant(writer: *Io.Writer, value: anytype, comptime en
 /// before the first element and after the last element.
 ///
 /// Includes size of padding between array elements.
-pub inline fn countOutArraySize(out_array: anytype) usize {
-    const ElType = @typeInfo(@FieldType(out_array, "array")).pointer.child;
+pub inline fn countArraySize(out_array: anytype) usize {
+    const ElemType = @typeInfo(@FieldType(out_array, "array")).pointer.child;
 
     // Fast path for types with static size
-    switch (ElType) {
+    switch (ElemType) {
         types.Bool => {
             // `Bool` is encoded as `u32`
             const bool_size = @sizeOf(u32);
             return bool_size * out_array.array.len;
         },
         types.UnixFd => {
-            const index_size = @sizeOf(@FieldType(ElType, "index"));
+            const index_size = @sizeOf(@FieldType(ElemType, "index"));
             return index_size * out_array.array.len;
         },
         else => {
-            if (types.isNum(ElType)) {
-                const num_size = @sizeOf(@FieldType(ElType, "num"));
+            if (types.isNum(ElemType)) {
+                const num_size = @sizeOf(@FieldType(ElemType, "num"));
                 return num_size * out_array.array.len;
             }
 
             // Slow path for types with dynamic size
             var size: usize = 0;
-            for (out_array.array) |el|
-                size += countDynamicValueSize(el);
+            for (out_array.array) |elem|
+                size += countDynamicValueSize(elem);
 
             return size;
         },

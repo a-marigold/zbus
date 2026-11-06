@@ -239,7 +239,7 @@ pub fn OutArray(comptime E: type) type {
         /// before and after all array elements.
         /// Includes size of padding between array elements.
         ///
-        /// See - `countOutArraySize`.
+        /// See - `countArraySize`.
         size: usize,
 
         // Length of `Array` is encoded as `u32`,
