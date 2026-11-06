@@ -320,9 +320,9 @@ pub fn StaticArray(comptime T: type) type {
     const FirstElemValueType = @FieldType(info.field_types[0], "el");
 
     inline for (info.field_types) |ElemType| {
-        const el_info = @typeInfo(ElemType);
+        const elem_info = @typeInfo(ElemType);
 
-        const is_static_array_elem = switch (el_info) {
+        const is_static_array_elem = switch (elem_info) {
             .optional => |optional| isStaticArrayElem(optional.child),
             else => isStaticArrayElem(ElemType),
         };

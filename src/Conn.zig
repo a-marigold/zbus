@@ -15,7 +15,6 @@ const posix = std.posix;
 const linux = std.os.linux;
 const InMessage = @import("InMessage.zig");
 const out_message = @import("out_message.zig");
-
 const OutMessage = out_message.OutMessage;
 
 const SYSTEM_BUS_PATH = "/var/run/dbus/system_bus_socket";
@@ -23,7 +22,6 @@ const SYSTEM_BUS_ENV_NAME = "DBUS_SYSTEM_BUS_ADDRESS";
 const SESSION_BUS_ENV_NAME = "DBUS_SESSION_BUS_ADDRESS";
 
 stream: net.Stream,
-
 reader: net.Stream.Reader,
 writer: net.Stream.Writer,
 

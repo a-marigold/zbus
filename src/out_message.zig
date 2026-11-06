@@ -4,6 +4,7 @@ const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
 const lang = std.lang;
+const meta = std.meta;
 const builtin = @import("builtin");
 const types = @import("types.zig");
 const message_types = @import("message_types.zig");
@@ -137,8 +138,7 @@ fn serializeValueInner(
 // They return new, updated `pos` instead of the size of `value`
 
 inline fn serializeNum(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
-    const T = @TypeOf(value);
-    const NumType = @FieldType(T, "num");
+    const NumType = @FieldType(@TypeOf(value), "num");
 
     if (NumType == u8) {
         try writer.writeByte(value.num);
@@ -158,6 +158,7 @@ inline fn serializeBool(writer: *Io.Writer, value: types.Bool, comptime endian: 
 
 inline fn serializeUnixFd(writer: *Io.Writer, value: types.UnixFd, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
     const IndexType = @FieldType(types.UnixFd, "index");
+
     try writer.writeInt(IndexType, value.index, endian);
 
     return pos + @sizeOf(IndexType);
@@ -188,6 +189,7 @@ inline fn serializeStrLike(writer: Io.Writer, value: anytype, comptime endian: l
         else => try writer.writeInt(StrLenType, @intCast(str.len), endian),
     }
 
+    // Include null terminator
     const full_str = mem.absorbSentinel(str);
     try writer.writeAll(full_str);
 
@@ -200,7 +202,7 @@ inline fn serializeStruct(writer: *Io.Writer, value: anytype, comptime endian: l
 
     var new_pos = pos;
     inline for (info.field_names, info.field_types, 0..) |field_name, FieldType, index| {
-        const padding = switch (index) {
+        const padding = switch (comptime index) {
             // The first field is aligned by `Struct` alignment
             0 => 0,
 
@@ -230,8 +232,8 @@ inline fn serializeDictEntry(writer: *Io.Writer, value: anytype, comptime endian
 }
 
 inline fn serializeOutArray(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
-    const T = @TypeOf(value);
-    const ElemTypeType = @typeInfo(@FieldType(T, "array")).pointer.child;
+    const ArrayType = @FieldType(@TypeOf(value), "array");
+    const ElemType = meta.Child(ArrayType);
 
     var new_pos = pos;
 
@@ -239,17 +241,17 @@ inline fn serializeOutArray(writer: *Io.Writer, value: anytype, comptime endian:
     try writer.writeInt(u32, @intCast(value.size), endian);
     new_pos += @sizeOf(u32);
 
-    var el_index: usize = 0;
-    while (true) : (el_index += 1) {
+    var elem_index: usize = 0;
+    while (true) : (elem_index += 1) {
         // In accordance with the spec, there must be alignment of
         // the first value after Array size even if there is no elements.
         // So, do `while(true)` with at least 1 `alignValue`
-        const el_padding = try alignValue(writer, ElemTypeType, pos);
-        new_pos += el_padding;
+        const elem_padding = try alignValue(writer, ElemType, pos);
+        new_pos += elem_padding;
 
-        if (el_index == value.array.len) break;
+        if (elem_index == value.array.len) break;
 
-        const el = value.array[el_index];
+        const el = value.array[elem_index];
         new_pos = try serializeValueInner(writer, el, endian, pos);
     }
 
@@ -260,19 +262,16 @@ inline fn serializeVariant(writer: *Io.Writer, value: anytype, comptime endian: 
     const info = @typeInfo(@FieldType(value, "variant")).@"union";
 
     const TagType = info.tag_type.?;
-    const active_tag = @backingInt(value);
+    const active_tag = @backingInt(value.variant);
 
     inline for (info.field_names, info.field_types) |field_name, FieldType| {
         const field_tag = @field(TagType, field_name);
 
         if (field_tag == active_tag) {
             const field_value = @field(value, field_name);
-            return serializeStaticVariant(
-                writer,
-                types.StaticVariant(FieldType).init(field_value),
-                endian,
-                pos,
-            );
+
+            const static_variant: types.StaticVariant(FieldType) = .init(field_value);
+            return serializeStaticVariant(writer, static_variant, endian, pos);
         }
     }
 }
@@ -300,7 +299,7 @@ inline fn serializeStaticArrayElem(writer: *Io.Writer, value: anytype, comptime 
     // Key is already aligned by `StaticArrayElem` alignment
     new_pos = try serializeValueInner(writer, types.getStaticArrayElemKey(T), endian, new_pos);
 
-    const value_padding = try alignValue(writer, @FieldType(value, "el"), new_pos);
+    const value_padding = try alignValue(writer, @FieldType(T, "el"), new_pos);
     new_pos += value_padding;
     new_pos = try serializeValueInner(writer, value.el, endian, new_pos);
 
@@ -308,18 +307,18 @@ inline fn serializeStaticArrayElem(writer: *Io.Writer, value: anytype, comptime 
 }
 
 inline fn serializeStaticVariant(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
-    const VariantType = @FieldType(value, "variant");
+    const UnionType = @FieldType(@TypeOf(value), "variant");
 
     var new_pos = pos;
 
     // `Variant` is encoded as `Signature` of
     // the variant value, followed by that value
-    const variant_signature: types.Signature = comptime .init(types.signatureFromType(VariantType));
+    const variant_signature: types.Signature = comptime .init(types.signatureFromType(UnionType));
 
     // `Signature` doesn't require alignment 'cause it starts from `u8` (the length)
     new_pos = try serializeStrLike(writer, variant_signature, endian, new_pos);
 
-    const variant_padding = try alignValue(writer, VariantType, endian, new_pos);
+    const variant_padding = try alignValue(writer, UnionType, endian, new_pos);
     new_pos += variant_padding;
     new_pos = try serializeValueInner(writer, value.variant, endian, new_pos);
 
@@ -333,7 +332,8 @@ inline fn serializeStaticVariant(writer: *Io.Writer, value: anytype, comptime en
 ///
 /// Includes size of padding between array elements.
 pub inline fn countArraySize(out_array: anytype) usize {
-    const ElemType = @typeInfo(@FieldType(out_array, "array")).pointer.child;
+    const ArrayType = @FieldType(@TypeOf(out_array), "array");
+    const ElemType = meta.Child(ArrayType);
 
     // Fast path for types with static size
     switch (ElemType) {
@@ -375,7 +375,12 @@ fn countDynamicValueSize(value: anytype) usize {
 
     return switch (T) {
         types.Str, types.ObjectPath, types.Signature => {
-            const null_terminator_size = 1;
+            // Length of `Signature` is encoded as `u8`,
+            // lengths of `Str` and `ObjectPath` are in `u32`
+            const StrLenType = switch (T) {
+                types.Signature => u8,
+                else => u32,
+            };
 
             const str = switch (T) {
                 types.Str => value.str,
@@ -383,12 +388,10 @@ fn countDynamicValueSize(value: anytype) usize {
                 else => value.signature,
             };
 
-            const StrLenType = switch (T) {
-                types.Signature => u8,
-                else => u32,
-            };
+            // Include null terminator
+            const full_str = mem.absorbSentinel(str);
 
-            return @sizeOf(StrLenType) + str.len + null_terminator_size;
+            return @sizeOf(StrLenType) + full_str.len;
         },
         else => {
             if (types.isDictEntry(T))
@@ -419,14 +422,14 @@ fn countDynamicValueSize(value: anytype) usize {
                 }
             }
             if (types.isStaticVariant(T)) {
-                const VariantType = @FieldType(T, "variant");
+                const UnionType = @FieldType(T, "variant");
 
                 // `Variant` is encoded as `Signature` of
                 // the variant value, followed by that value
                 const variant_signature: types.Signature =
-                    comptime .init(types.signatureFromType(VariantType));
+                    comptime .init(types.signatureFromType(UnionType));
 
-                return countDynamicValueSize(variant_signature) + countDynamicValueSize(value);
+                return countDynamicValueSize(variant_signature) + countDynamicValueSize(value.variant);
             }
 
             @compileError("Expected a D-Bus type with dynamic size, found " ++ @typeName(T));

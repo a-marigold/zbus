@@ -4,8 +4,11 @@ const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
 const lang = std.lang;
+const meta = std.meta;
 const types = @import("types.zig");
 const message_types = @import("message_types.zig");
+
+// TODO: `len` to `size` where it's semantically correct
 
 header: Header,
 body: []const u8,
@@ -88,19 +91,19 @@ pub fn parse(gpa: mem.Allocator, comptime M: type, reader: *Io.Reader) ParseErro
 
 inline fn parseHeader(reader: *Io.Reader) Io.Reader.Error!struct {
     endian: lang.Endian,
-    message_type: @backingInt(Header.MessageType),
-    flags: @FieldType(Header, "flags"),
+    message_type: meta.BackingInt(message_types.MessageType),
+    flags: message_types.MessageFlags,
     version: u8,
-    body_len: @FieldType(Header, "body_len"),
+    body_len: u32,
     serial: @FieldType(Header, "serial"),
     fields_len: u32,
 } {
-    // (four `u8`) + (two `u32`) + (one `u32`, which is size of fields)
+    // (four `u8`) + (two `u32`) + (size of fields as `u32`)
     const header_size = 16;
 
     const header = block: {
         // Copy to stack for correct integers alignment
-        var buffer: [header_size]u8 align(8) = undefined;
+        var buffer: [header_size]u8 align(@sizeOf(u32)) = undefined;
         try reader.readSliceAll(&buffer);
 
         break :block buffer;
@@ -123,7 +126,7 @@ inline fn parseHeader(reader: *Io.Reader) Io.Reader.Error!struct {
     const version = header[header_pos];
     header_pos += 1;
 
-    const BodyLenType = @FieldType(Header.BodySize, "size");
+    const BodyLenType = u32;
     const body_len_size = @sizeOf(BodyLenType);
 
     const body_len = mem.readInt(BodyLenType, header[header_pos..body_len_size], endian);
@@ -153,12 +156,13 @@ fn ParseValueResult(comptime T: type) type {
     return struct {
         /// The parsed value.
         value: T,
+
         /// The amount of `input` bytes that were read to parse the value.
         ///
         /// Includes padding bytes of elements of container types.
         ///
         /// It's always less than or equal `input.len`.
-        size: u64,
+        size: usize,
     };
 }
 
@@ -292,7 +296,7 @@ inline fn parseStrLike(
 
     const str = full_str[0..content_len :0];
 
-    return .{ .value = .init(str), .size = str_len_size + full_str_len };
+    return .{ .value = try .init(str), .size = str_len_size + full_str_len };
 }
 
 inline fn parseStruct(
@@ -362,7 +366,7 @@ inline fn parseInArray(
     input: []align(types.alignmentFromType(T)) const u8,
     endian: lang.Endian,
 ) ParseValueError!ParseValueResult(T) {
-    const ElemType = @typeInfo(T).array.child;
+    const ElemType = meta.Child(@FieldType(T, "array"));
 
     const ArrayLenType = u32;
     const array_len_size = @sizeOf(ArrayLenType);
@@ -380,9 +384,9 @@ inline fn parseInArray(
 
     if (array_len > remaining_input.len) return ParseValueError.TooLongArray;
 
-    const array_data = remaining_input[0..array_len];
+    const elems = remaining_input[0..array_len];
 
-    return .{ .value = .init(array_data), .size = 0 };
+    return .{ .value = .init(elems), .size = 0 };
 }
 
 inline fn parseVariant(
