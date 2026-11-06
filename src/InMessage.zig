@@ -33,7 +33,8 @@ const Header = struct {
     /// See `message_types.MessageFlags`.
     flags: u8,
 
-    body_len: u32,
+    /// Size of body in bytes.
+    body_size: u32,
 
     /// Serial number of the message.
     serial: u32,
@@ -71,15 +72,15 @@ pub const ParseError = error{
     InvalidMessageType,
     UnsupportedVersion,
 } || ParseValueError || mem.Allocator.Error;
-pub fn parse(gpa: mem.Allocator, comptime M: type, reader: *Io.Reader) ParseError!M {
+pub fn parse(gpa: mem.Allocator, reader: *Io.Reader) ParseError!@This() {
     const header = try parseHeader(reader);
 
     const fields_input, const body_input = block: {
-        const input = try gpa.alloc(u8, header.fields_len + header.body_len);
+        const input = try gpa.alloc(u8, header.fields_size + header.body_size);
 
         break :block .{
-            input[0..header.fields_len],
-            input[header.fields_len..header.body_len],
+            input[0..header.fields_size],
+            input[header.fields_size..header.body_size],
         };
     };
 
@@ -94,9 +95,9 @@ inline fn parseHeader(reader: *Io.Reader) Io.Reader.Error!struct {
     message_type: meta.BackingInt(message_types.MessageType),
     flags: message_types.MessageFlags,
     version: u8,
-    body_len: u32,
+    body_size: @FieldType(Header, "body_size"),
     serial: @FieldType(Header, "serial"),
-    fields_len: u32,
+    fields_size: u32,
 } {
     // (four `u8`) + (two `u32`) + (size of fields as `u32`)
     const header_size = 16;
@@ -126,29 +127,37 @@ inline fn parseHeader(reader: *Io.Reader) Io.Reader.Error!struct {
     const version = header[header_pos];
     header_pos += 1;
 
-    const BodyLenType = u32;
-    const body_len_size = @sizeOf(BodyLenType);
-
-    const body_len = mem.readInt(BodyLenType, header[header_pos..body_len_size], endian);
-    header_pos += @sizeOf(BodyLenType);
+    const BodySizeType = @FieldType(Header, "body_size");
+    const body_len = mem.readInt(
+        BodySizeType,
+        header[header_pos..@sizeOf(BodySizeType)],
+        endian,
+    );
+    header_pos += @sizeOf(BodySizeType);
 
     const SerialType = @FieldType(Header, "serial");
-    const serial_size = @sizeOf(SerialType);
-
-    const serial = mem.readInt(SerialType, header[header_pos..serial_size], endian);
+    const serial = mem.readInt(
+        SerialType,
+        header[header_pos..@sizeOf(SerialType)],
+        endian,
+    );
     header_pos += @sizeOf(SerialType);
 
-    const fields_len_size = @sizeOf(u32);
-    const fields_len = mem.readInt(u32, header[header_pos..fields_len_size], endian);
+    const FieldsSizeType = u32;
+    const fields_size = mem.readInt(
+        FieldsSizeType,
+        header[header_pos..@sizeOf(FieldsSizeType)],
+        endian,
+    );
 
     return .{
         .endian = endian,
         .message_type = message_type,
         .flags = flags,
         .version = version,
-        .body_len = body_len,
+        .body_size = body_len,
         .serial = serial,
-        .fields_len = fields_len,
+        .fields_size = fields_size,
     };
 }
 
