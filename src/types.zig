@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const mem = std.mem;
+const meta = std.meta;
 
 const MIBIBYTE_SIZE = 1_048_576;
 
@@ -534,13 +535,15 @@ fn signatureFromTypeInner(
                 // `DictEntry` is handled in the `Array` logic
                 @compileError("`DictEntry` isn't allowed outside of `Array`");
 
-            if (isOutArray(T)) {
+            if (isOutArray(T) or isInArray(T)) {
                 const next_array_depth = array_depth + 1;
                 if (next_array_depth > MAX_ARRAY_DEPTH)
                     @compileError("Reached max array depth");
 
-                const info = @typeInfo(@FieldType(T, "array")).pointer;
-                const ElemType = info.child;
+                const ElemType = if (isInArray())
+                    T.ElemType
+                else
+                    meta.Child(@FieldType(T, "array"));
 
                 if (isDictEntry(ElemType)) {
                     const next_struct_depth = struct_depth + 1;
