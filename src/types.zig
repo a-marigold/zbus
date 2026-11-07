@@ -66,7 +66,7 @@ pub fn Num(comptime T: type) type {
         }
     };
 }
-pub inline fn isNum(comptime T: type) type {
+pub fn isNum(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_NUM__");
 }
 
@@ -166,7 +166,7 @@ pub fn Struct(comptime T: type) type {
         }
     };
 }
-pub inline fn isStruct(comptime T: type) bool {
+pub fn isStruct(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_STRUCT__");
 }
 
@@ -195,7 +195,7 @@ pub fn DictEntry(comptime K: type, comptime V: type) type {
         }
     };
 }
-pub inline fn isDictEntry(comptime T: type) bool {
+pub fn isDictEntry(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_DICT_ENTRY__");
 }
 
@@ -267,8 +267,115 @@ pub fn OutArray(comptime E: type) type {
         }
     };
 }
-pub inline fn isOutArray(comptime T: type) bool {
+pub fn isOutArray(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_OUT_ARRAY__");
+}
+
+/// Not an official D-Bus type. Under the hood, it's a valid D-Bus array of structs.
+///
+/// `T` is a zig struct with `StaticArrayElem` in fields.
+/// `StaticArrayElem` must have the same type in their keys and values.
+/// E.g, only `Num` in key and only `StaticVariant` for all elements.
+///
+/// Fields of `T` can be optional. `T` must have at least 1 field.
+///
+/// Why is it used:
+/// Amount of elems and value types are known at comptime,
+/// so parsing messages doesn't require dynamic allocation for such arrays.
+/// It allows use of `StaticVariant` in arrays.
+pub fn StaticArray(comptime T: type) type {
+    const info = @typeInfo(T).@"struct";
+
+    if (info.field_types.len == 0) @compileError("`StaticArray` must have at least 1 elem");
+
+    // Expect that all types of elem keys and values
+    // equal the first element type
+
+    comptime var ExpectedElemKeyType: type = undefined;
+    comptime var ExpectedElemValueType: type = undefined;
+
+    inline for (info.field_types, 0..) |ElemType, index| {
+        const UnwrapElemType = switch (@typeInfo(ElemType)) {
+            .optional => |optional| optional.child,
+            else => ElemType,
+        };
+        if (!isStaticArrayElem(UnwrapElemType)) @compileError("Expected `StaticArrayElem`, found " ++ @typeName(T));
+
+        const ElemKeyType = UnwrapElemType.KeyType;
+        const ElemValueType = @FieldType(UnwrapElemType, "elem");
+
+        if (index == 0) {
+            ExpectedElemKeyType = ElemKeyType;
+            ExpectedElemValueType = ElemValueType;
+        } else {
+            if (!eqlTypes(ElemKeyType, ExpectedElemKeyType))
+                @compileError("Types of keys must be the same");
+
+            if (!eqlTypes(ElemValueType, ExpectedElemValueType))
+                @compileError("Types of elements must be the same");
+        }
+    }
+
+    return struct {
+        @"struct": T,
+
+        pub const ElemKeyType = ExpectedElemKeyType;
+        pub const ElemValueType = ExpectedElemValueType;
+
+        // Length of `Array` is encoded as `u32`,
+        // so the alignment is 4.
+        // Alignment of elements is handled independently
+        pub const __ZBUS_ALIGNMENT__ = 4;
+
+        pub const __IS_ZBUS_TYPE__ = void;
+        pub const __IS_ZBUS_STATIC_ARRAY__ = void;
+
+        pub inline fn init(@"struct": T) @This() {
+            return .{ .@"struct" = @"struct" };
+        }
+    };
+}
+pub fn isStaticArray(comptime T: type) bool {
+    return @hasDecl(T, "__IS_ZBUS_STATIC_ARRAY__");
+}
+
+/// `key` is a comptime value of D-Bus type, used to
+/// recognize element during `StaticArray` serialization or parsing.
+///
+/// `V` is type of value of the key-value pair.
+///
+/// The same as `Struct` key-value pair, but the key is static.
+pub fn StaticArrayElem(comptime key: anytype, comptime V: type) type {
+    const ElemKeyType = @TypeOf(key);
+    if (!isType(ElemKeyType))
+        @compileError("Expected a D-Bus type of key, found " ++ @typeName(ElemKeyType));
+
+    if (!isType(V))
+        @compileError("Expected a D-Bus type `V`, found " ++ @typeName(V));
+
+    return struct {
+        elem: V,
+
+        pub const KeyType = ElemKeyType;
+        pub const __ZBUS_ELEM_KEY__ = key;
+
+        // The same as alignment of `Struct`
+        pub const ALIGNMENT = 8;
+
+        pub const __IS_ZBUS_TYPE__ = void;
+        pub const __IS_ZBUS_STATIC_ARRAY_ELEM__ = void;
+
+        pub inline fn init(el: V) @This() {
+            return .{ .elem = el };
+        }
+    };
+}
+pub fn isStaticArrayElem(comptime T: type) bool {
+    return @hasDecl(T, "__IS_ZBUS_STATIC_ARRAY_ELEM__");
+}
+/// Returns the comptime key of `StaticArrayElem`.
+pub fn getStaticArrayElemKey(comptime E: type) E.KeyType {
+    return E.__ZBUS_ELEM_KEY__;
 }
 
 /// `U` is a union of D-Bus types. Union must be tagged.
@@ -302,112 +409,8 @@ pub fn Variant(comptime U: type) type {
         }
     };
 }
-pub inline fn isVariant(comptime T: type) bool {
+pub fn isVariant(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_VARIANT__");
-}
-
-/// Not an official D-Bus type. Under the hood, it maps to valid D-Bus array of structs.
-///
-/// `T` is a struct with `StaticArrayElem` in fields.
-/// `StaticArrayElem` must have the same type in their keys and values.
-/// E.g, only `Num` in key and only `StaticVariant` for all elements.
-///
-/// Fields of `T` can be optional.
-///
-/// Why is it used:
-///
-/// Keys and value types of them are known at comptime,
-/// so parsing messages doesn't require dynamic allocation for such arrays.
-///
-/// Example:
-/// `Header` of messages is an array of structs, where bytes are keys and variants are values.
-/// But there are only 9 standardized, predefined possible fields.
-pub fn StaticArray(comptime T: type) type {
-    const info = @typeInfo(T).@"struct";
-
-    const FirstElemKeyType = info.field_types[0].KeyType;
-    const FirstElemValueType = @FieldType(info.field_types[0], "el");
-
-    inline for (info.field_types) |ElemType| {
-        const elem_info = @typeInfo(ElemType);
-
-        const is_static_array_elem = switch (elem_info) {
-            .optional => |optional| isStaticArrayElem(optional.child),
-            else => isStaticArrayElem(ElemType),
-        };
-        if (!is_static_array_elem) @compileError("Expected `StaticArrayEl`, found " ++ @typeName(T));
-
-        const ElemKeyType = ElemType.KeyType;
-        if (!eqlTypes(ElemKeyType, FirstElemKeyType))
-            @compileError("Types of keys must be the same");
-
-        const ElemValueType = @FieldType(ElemType, "el");
-        if (!eqlTypes(ElemValueType, FirstElemValueType))
-            @compileError("Types of elements must be the same");
-    }
-
-    return struct {
-        @"struct": T,
-
-        pub const ElemKeyType = FirstElemKeyType;
-        pub const ElemValueType = FirstElemValueType;
-
-        // Length of `Array` is encoded as `u32`,
-        // so the alignment is 4.
-        // Alignment of elements is handled independently
-        pub const __ZBUS_ALIGNMENT__ = 4;
-
-        pub const __IS_ZBUS_TYPE__ = void;
-        pub const __IS_ZBUS_STATIC_ARRAY__ = void;
-
-        pub inline fn init(@"struct": T) @This() {
-            return .{ .@"struct" = @"struct" };
-        }
-    };
-}
-pub fn isStaticArray(comptime T: type) bool {
-    return @hasDecl(T, "__IS_ZBUS_STATIC_ARRAY__");
-}
-
-// TODO: inline `is*` functions
-
-/// `key` is a comptime value of D-Bus type, used to
-/// recognize element during `StaticArray` serialization or parsing.
-///
-/// `V` is type of value of the key-value pair.
-///
-/// The same as `Struct` key-value pair, but the key is static.
-pub fn StaticArrayElem(comptime key: anytype, comptime V: type) type {
-    const ElemKeyType = @TypeOf(key);
-    if (!isType(ElemKeyType))
-        @compileError("Expected a D-Bus type of key, found " ++ @typeName(ElemKeyType));
-
-    if (!isType(V))
-        @compileError("Expected a D-Bus type `V`, found " ++ @typeName(V));
-
-    return struct {
-        el: V,
-
-        pub const KeyType = ElemKeyType;
-        pub const __ZBUS_ELEM_KEY__ = key;
-
-        // The same as alignment of `Struct`
-        pub const ALIGNMENT = 8;
-
-        pub const __IS_ZBUS_TYPE__ = void;
-        pub const __IS_ZBUS_STATIC_ARRAY_ELEM__ = void;
-
-        pub inline fn init(el: V) @This() {
-            return .{ .el = el };
-        }
-    };
-}
-pub fn isStaticArrayElem(comptime T: type) bool {
-    return @hasDecl(T, "__IS_ZBUS_STATIC_ARRAY_ELEM__");
-}
-/// Returns the comptime key of `StaticArrayElem`.
-pub fn getStaticArrayElemKey(comptime T: type) T.KeyType {
-    return T.__ZBUS_EL_KEY__;
 }
 
 /// Like `Variant`, but it's known to always be only of one type.
@@ -449,12 +452,14 @@ fn eqlTypes(comptime A: type, comptime B: type) bool {
         isDictEntry(B)
     else if (isOutArray(A))
         isOutArray(B)
-    else if (isVariant(A))
-        isVariant(B)
     else if (isStaticArray(A))
         isStaticArray(B)
     else if (isStaticArrayElem(A))
         isStaticArrayElem(B)
+    else if (isVariant(A))
+        isVariant(B)
+    else if (isStaticVariant(A))
+        isStaticVariant(B)
     else
         A == B;
 }
@@ -489,7 +494,7 @@ pub inline fn validateSignature(comptime T: type, signature: []const u8) bool {
 /// - `T` has more than 32 nested arrays or 32 nested structs.
 /// - `DictEntry` is outside of `Array`.
 pub fn signatureFromType(comptime T: type) [:0]const u8 {
-    return signatureFromTypeInner(T, false, 0, 0);
+    return signatureFromTypeInner(T, 0, 0);
 }
 fn signatureFromTypeInner(
     comptime T: type,
