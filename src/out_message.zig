@@ -118,11 +118,11 @@ fn serializeValueInner(
         types.Bool => return serializeBool(writer, value, endian, pos),
         types.UnixFd => return serializeUnixFd(writer, value, endian, pos),
         types.Str, types.ObjectPath, types.Signature => return serializeStrLike(writer, value, endian, pos),
-        types.InArray => @compileError("Cannot use `InArray` in `OutMessage`"),
         else => {
             if (types.isNum(T)) return serializeNum(writer, value, endian, pos);
             if (types.isStruct(T)) return serializeStruct(writer, value, endian, pos);
             if (types.isDictEntry(T)) return serializeDictEntry(writer, value, endian, pos);
+            if (types.isInArray(T)) @compileError("Cannot use `InArray` in `OutMessage`");
             if (types.isOutArray(T)) return serializeOutArray(writer, value, endian, pos);
             if (types.isVariant(T)) return serializeVariant(writer, value, endian, pos);
             if (types.isStaticArray(T)) return serializeStaticArray(writer, value, endian, pos);
@@ -281,11 +281,11 @@ inline fn serializeStaticArray(writer: *Io.Writer, value: anytype, comptime endi
 
     var new_pos = pos;
     inline for (info.field_names, info.field_types) |field_name, FieldType| {
-        const el_padding = try alignValue(writer, FieldType, new_pos);
-        new_pos += el_padding;
+        const elem_padding = try alignValue(writer, FieldType, new_pos);
+        new_pos += elem_padding;
 
-        const el_value = @field(value.@"struct", field_name);
-        new_pos = try serializeStaticArrayElem(writer, el_value, endian, new_pos);
+        const elem_value = @field(value.@"struct", field_name);
+        new_pos = try serializeStaticArrayElem(writer, elem_value, endian, new_pos);
     }
 
     return new_pos;
@@ -335,7 +335,7 @@ pub inline fn countArraySize(out_array: anytype) usize {
     const ArrayType = @FieldType(@TypeOf(out_array), "array");
     const ElemType = meta.Child(ArrayType);
 
-    // Fast path for types with static size
+    // Fast path for types with static sizes
     switch (ElemType) {
         types.Bool => {
             // `Bool` is encoded as `u32`
@@ -352,7 +352,7 @@ pub inline fn countArraySize(out_array: anytype) usize {
                 return num_size * out_array.array.len;
             }
 
-            // Slow path for types with dynamic size
+            // Slow path for types with dynamic sizes
             var size: usize = 0;
             for (out_array.array) |elem|
                 size += countDynamicValueSize(elem);
@@ -405,6 +405,7 @@ fn countDynamicValueSize(value: anytype) usize {
 
                 return size;
             }
+            if (types.isInArray(T)) @compileError("Cannot use `InArray` in `OutMessage`");
             if (types.isOutArray(T)) return value.size;
             if (types.isVariant(T)) {
                 const info = @typeInfo(@FieldType(T, "variant")).@"union";

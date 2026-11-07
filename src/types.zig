@@ -9,8 +9,6 @@
 
 // TODO: variants depth validation
 
-// TODO: use std.meta instead of manual type info extraction
-
 const std = @import("std");
 const mem = std.mem;
 
@@ -207,23 +205,33 @@ pub inline fn isDictEntry(comptime T: type) bool {
 /// Distinction between `InArray` and `OutArray`
 /// is made to avoid allocations for `InArray`
 /// and to have various lazy iterators over it instead.
-pub const InArray = struct {
-    /// Length of it must fit 64 MiB.
-    elems: []const u8,
+pub fn InArray(comptime E: type) type {
+    return struct {
+        /// Length of it must fit 64 MiB.
+        elems: []const u8,
 
-    // Length of `Array` is encoded as `u32`,
-    // so the alignment is 4.
-    // Alignment of elements is handled independently
-    pub const __ZBUS_ALIGNMENT__ = 4;
+        pub const ElemType = E;
 
-    pub const InitError = error{TooLongArray};
-    pub inline fn init(elems: []const u8) InitError!@This() {
-        if (elems.len > MAX_ARRAY_SIZE) return InitError.TooLongArray;
+        // Length of `Array` is encoded as `u32`,
+        // so the alignment is 4.
+        // Alignment of elements is handled independently
+        pub const __ZBUS_ALIGNMENT__ = 4;
 
-        return .{ .elems = elems };
-    }
-};
-// TODO: replace `el` with `elem`
+        pub const __IS_ZBUS_TYPE__ = void;
+        pub const __IS_ZBUS_IN_ARRAY__ = void;
+
+        pub const InitError = error{TooLongArray};
+        pub inline fn init(elems: []const u8) InitError!@This() {
+            if (elems.len > MAX_ARRAY_SIZE) return InitError.TooLongArray;
+
+            return .{ .elems = elems };
+        }
+    };
+}
+pub fn isInArray(comptime T: type) bool {
+    return @hasDecl(T, "__IS_ZBUS_IN_ARRAY__");
+}
+
 /// Array to be sent in an `OutMessage`.
 pub fn OutArray(comptime E: type) type {
     if (!isType(E)) @compileError("`OutArray` element must be of a D-Bus type");
@@ -262,13 +270,13 @@ pub inline fn isOutArray(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_OUT_ARRAY__");
 }
 
-/// `U` is a union of D-Bus types, necessarily tagged.
+/// `U` is a union of D-Bus types. Union must be tagged.
 ///
 /// `U` can contain any D-Bus types and
 /// may be limited only to a few types.
 ///
 /// An error appears during parsing when parsed
-/// variant has type that doesn't match any of `U` types.
+/// variant has a type that doesn't match any of `U` types.
 pub fn Variant(comptime U: type) type {
     const info = @typeInfo(U).@"union";
 

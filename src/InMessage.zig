@@ -8,8 +8,6 @@ const meta = std.meta;
 const types = @import("types.zig");
 const message_types = @import("message_types.zig");
 
-// TODO: `len` to `size` where it's semantically correct
-
 header: Header,
 body: []const u8,
 
@@ -128,7 +126,7 @@ inline fn parseHeader(reader: *Io.Reader) Io.Reader.Error!struct {
     header_pos += 1;
 
     const BodySizeType = @FieldType(Header, "body_size");
-    const body_len = mem.readInt(
+    const body_size = mem.readInt(
         BodySizeType,
         header[header_pos..@sizeOf(BodySizeType)],
         endian,
@@ -155,7 +153,7 @@ inline fn parseHeader(reader: *Io.Reader) Io.Reader.Error!struct {
         .message_type = message_type,
         .flags = flags,
         .version = version,
-        .body_size = body_len,
+        .body_size = body_size,
         .serial = serial,
         .fields_size = fields_size,
     };
@@ -203,12 +201,12 @@ fn parseValueInner(comptime T: type, input: AlignInput(T), endian: lang.Endian) 
         types.Bool => return parseBool(input, endian),
         types.UnixFd => return parseUnixFd(input, endian),
         types.Str, types.ObjectPath, types.Signature => return parseStrLike(T, input, endian),
-        types.InArray => return parseInArray(T, input, endian),
         else => {
             if (types.isNum(T)) return parseNum(T, input, endian);
             if (types.isStruct(T)) return parseStruct(T, input, endian);
             if (types.isDictEntry(T)) return parseDictEntry(T, input, endian);
             if (types.isVariant(T)) return parseStrLike(T, input, endian);
+            if (types.isInArray(T)) return parseInArray(T, input, endian);
             if (types.isOutArray(T)) @compileError("Cannot use `OutArray` in `InMessage`");
             if (types.isStaticVariant(T)) return parseStaticVariant(T, input, endian);
             // if (types.isStaticArray(T)) return parseStaticArray(T,input, endian);
@@ -344,27 +342,29 @@ inline fn parseDictEntry(comptime T: type, input: AlignInput(T), endian: lang.En
 }
 
 inline fn parseInArray(comptime T: type, input: AlignInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
-    const ElemType = meta.Child(@FieldType(T, "array"));
+    const ElemType = T.ElemType;
 
-    const ArrayLenType = u32;
-    const array_len_size = @sizeOf(ArrayLenType);
+    const ArraySizeType = u32;
 
-    if (array_len_size > input.len) return ParseValueError.UnexpectedEnd;
+    if (@sizeOf(ArraySizeType) > input.len) return ParseValueError.UnexpectedEnd;
 
-    const array_len = mem.readInt(ArrayLenType, input[0..array_len_size], endian);
+    const array_size = mem.readInt(ArraySizeType, input[0..@sizeOf(ArraySizeType)], endian);
 
-    var remaining_input = input[array_len_size..];
+    var remaining_input = input[@sizeOf(ArraySizeType)..];
 
     const first_elem_padding = getValuePadding(input.ptr, ElemType);
     if (first_elem_padding < remaining_input.len) return ParseValueError.UnexpectedEnd;
 
     remaining_input = remaining_input[first_elem_padding];
 
-    if (array_len > remaining_input.len) return ParseValueError.TooLongArray;
+    if (array_size > remaining_input.len) return ParseValueError.TooLongArray;
 
-    const elems = remaining_input[0..array_len];
+    const elems = remaining_input[0..array_size];
 
-    return .{ .value = .init(elems), .size = 0 };
+    return .{
+        .value = try .init(elems),
+        .size = @sizeOf(ArraySizeType) + first_elem_padding + array_size,
+    };
 }
 
 inline fn parseVariant(comptime T: type, input: AlignInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
