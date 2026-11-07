@@ -210,6 +210,7 @@ fn parseValueInner(comptime T: type, input: AlignInput(T), endian: lang.Endian) 
             if (types.isDictEntry(T)) return parseDictEntry(T, input, endian);
             if (types.isVariant(T)) return parseStrLike(T, input, endian);
             if (types.isOutArray(T)) @compileError("Cannot use `OutArray` in `InMessage`");
+            if (types.isStaticVariant(T)) return parseStaticVariant(T, input, endian);
             // if (types.isStaticArray(T)) return parseStaticArray(T,input, endian);
             // if (types.isStaticArrayEl(T))
             //     // It's handled in `parseStaticArray`
@@ -301,7 +302,7 @@ inline fn parseStruct(comptime T: type, input: AlignInput(T), endian: lang.Endia
     inline for (info.field_names, info.field_types, 0..) |field_name, FieldType, index| {
         const aligned_input: AlignInput(FieldType) = switch (index) {
             // The first field is already aligned by `Struct` alignment
-            0 => @alignCast(input),
+            0 => input,
 
             else => block: {
                 const field_padding = getValuePadding(remaining_input.ptr, FieldType);
@@ -327,7 +328,7 @@ inline fn parseDictEntry(comptime T: type, input: AlignInput(T), endian: lang.En
     const ValueType = @FieldType(T, "value");
 
     // Key is already aligned by `DictEntry` alignment
-    const parsed_key = try parseValueInner(KeyType, @alignCast(input), endian);
+    const parsed_key = try parseValueInner(KeyType, input, endian);
 
     const remaining_input = input[parsed_key.size..];
 
@@ -394,6 +395,27 @@ inline fn parseVariant(comptime T: type, input: AlignInput(T), endian: lang.Endi
     }
 
     return ParseValueError.VariantTypeMismatch;
+}
+
+inline fn parseStaticVariant(comptime T: type, input: AlignInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
+    const VariantType = @FieldType(T, "variant");
+
+    const variant_signature: types.Signature = comptime try .init(types.signatureFromType(T));
+
+    const parsed_signature = try parseStrLike(T, input, endian);
+    if (!mem.eql(u8, parsed_signature, variant_signature)) return ParseValueError.VariantTypeMismatch;
+
+    const remaining_input = input[parsed_signature.size..];
+
+    const variant_padding = getValuePadding(input.ptr, VariantType);
+    const aligned_input = try alignInput(VariantType, remaining_input, variant_padding);
+
+    const parsed_variant = try parseValueInner(VariantType, aligned_input, endian);
+
+    return .{
+        .value = .init(parsed_variant),
+        .size = parsed_signature.size + variant_padding + parsed_variant.size,
+    };
 }
 
 /// Returns type of aligned input slice
