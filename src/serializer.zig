@@ -234,7 +234,6 @@ inline fn serializeStaticArray(writer: *Io.Writer, value: anytype, comptime endi
 
     return new_pos;
 }
-
 inline fn serializeStaticArrayElem(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
     const V = @TypeOf(value);
 
@@ -267,7 +266,6 @@ inline fn serializeVariant(writer: *Io.Writer, value: anytype, comptime endian: 
         }
     }
 }
-
 inline fn serializeStaticVariant(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
     const UnionType = @FieldType(@TypeOf(value), "variant");
 
@@ -305,9 +303,17 @@ pub inline fn countArraySize(out_array: anytype) usize {
     // Slow path for types with dynamic sizes
     var size: usize = 0;
     for (out_array.array) |elem|
-        size += countDynamicValueSize(elem);
+        size += countValueSize(elem);
 
     return size;
+}
+
+/// Counts the size of `value`, which can be comptime- or runtime- known.
+///
+/// This function is inline to optimize comptime-known sizes.
+inline fn countValueSize(value: anytype) usize {
+    const V = @TypeOf(value);
+    return (comptime countStaticValueSize(V)) orelse countDynamicValueSize(value);
 }
 
 /// If `V` is a D-Bus type with size
@@ -367,14 +373,14 @@ fn countDynamicValueSize(value: anytype) usize {
         },
         else => {
             if (types.isDictEntry(V))
-                return countDynamicValueSize(value.key) + countDynamicValueSize(value.value);
+                return countValueSize(value.key) + countValueSize(value.value);
 
             if (types.isStruct(V)) {
                 const info = @typeInfo(@FieldType(V, "struct")).@"struct";
 
                 var size: usize = 0;
                 inline for (info.field_types) |FieldType|
-                    size += countDynamicValueSize(FieldType);
+                    size += countValueSize(FieldType);
 
                 return size;
             }
@@ -387,13 +393,20 @@ fn countDynamicValueSize(value: anytype) usize {
                 const info = @typeInfo(@FieldType(V, "struct")).@"struct";
 
                 var size: usize = 0;
-                inline for (info.field_names) |field_name| {
+                inline for (info.field_names, info.field_types) |field_name, ElemType| {
                     const elem = @field(value.@"struct", field_name);
-                    size += countDynamicValueSize(elem);
+
+                    const key = types.getStaticArrayElemKey(ElemType);
+                    const elem_value = elem.elem;
+
+                    size += countValueSize(key) + countValueSize(elem_value);
                 }
 
                 return size;
             }
+            if (types.isStaticArrayElem(V))
+                // `StaticArrayElem` is handled in the `StaticArray` logic
+                @compileError("`StaticArrayElem` isn't allowed outside of `StaticArray`");
 
             if (types.isVariant(V)) {
                 const info = @typeInfo(@FieldType(V, "variant")).@"union";
@@ -406,20 +419,20 @@ fn countDynamicValueSize(value: anytype) usize {
 
                     if (field_tag == active_tag) {
                         const field_value = @field(value, field_name);
+
                         return countDynamicValueSize(types.StaticVariant(FieldType).init(field_value));
                     }
                 }
             }
-
             if (types.isStaticVariant(V)) {
-                const UnionType = @FieldType(V, "variant");
+                const VariantType = @FieldType(V, "variant");
 
                 // `Variant` is encoded as `Signature` of
                 // the variant value, followed by that value
                 const variant_signature: types.Signature =
-                    comptime .init(types.signatureFromType(UnionType));
+                    comptime .init(types.signatureFromType(VariantType));
 
-                return countDynamicValueSize(variant_signature) + countDynamicValueSize(value.variant);
+                return countDynamicValueSize(variant_signature) + countValueSize(value.variant);
             }
 
             @compileError("Expected a D-Bus type with dynamic size, found " ++ @typeName(V));
@@ -433,8 +446,8 @@ fn countDynamicValueSize(value: anytype) usize {
 /// Returns the amount of written bytes.
 ///
 /// `pos` is the number of totally written bytes to `writer`.
-inline fn alignValue(writer: *Io.Writer, comptime T: type, pos: usize) Io.Writer.Error!void {
-    const padding = types.getAlignmentPadding(pos, types.alignmentFromType(T));
+inline fn alignValue(writer: *Io.Writer, comptime V: type, pos: usize) Io.Writer.Error!void {
+    const padding = types.getAlignmentPadding(pos, types.alignmentFromType(V));
 
     try alignWriter(writer, padding);
 
