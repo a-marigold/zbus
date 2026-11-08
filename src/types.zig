@@ -20,13 +20,11 @@ const MIBIBYTE_SIZE = 1_048_576;
 /// https://dbus.freedesktop.org/doc/dbus-specification.html#id-1.4.5
 const MAX_ARRAY_SIZE = 64 * MIBIBYTE_SIZE;
 
-/// Value is taken from the spec:
-///
-/// https://dbus.freedesktop.org/doc/dbus-specification.html#id-1.4.5
 const MAX_STR_LEN = MAX_ARRAY_SIZE;
+const MAX_OBJECT_PATH_LEN = MAX_ARRAY_SIZE;
 
 /// Length of `Signature` is encoded as `u8`,
-/// so it can be no more than 255.
+/// so it cannot be more than 255.
 const MAX_SIGNATURE_LEN = 255;
 
 /// Value is taken from the spec:
@@ -81,8 +79,8 @@ pub const Bool = struct {
     }
 };
 
-/// Not a file descriptor itself, but an index
-/// of the UNIX socket message ancillary array with file descriptors.
+/// Not a file descriptor itself, but an index of
+/// an ancillary array with descriptors in socket message.
 pub const UnixFd = struct {
     index: u32,
 
@@ -111,7 +109,7 @@ pub const Str = struct {
 
 pub const ObjectPath = struct {
     /// Length of path must fit 64 MiB.
-    /// For larger patgs, `init` returns an error.
+    /// For larger paths, `init` returns an error.
     path: [:0]const u8,
 
     // Length of `ObjectPath` is encoded as `u32`, so the alignment is 4
@@ -119,7 +117,7 @@ pub const ObjectPath = struct {
 
     pub const InitError = error{TooLongPath};
     pub inline fn init(path: [:0]const u8) InitError!@This() {
-        if (path.len > MAX_STR_LEN) return InitError.TooLongPath;
+        if (path.len > MAX_OBJECT_PATH_LEN) return InitError.TooLongPath;
 
         return .{ .path = path };
     }
@@ -271,37 +269,39 @@ pub fn isOutArray(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_OUT_ARRAY__");
 }
 
-/// Not an official D-Bus type. Under the hood, it's a valid D-Bus array of structs.
+/// Not an official D-Bus type. Under the hood, it's a D-Bus array of structs.
 ///
 /// `T` is a zig struct with `StaticArrayElem` in fields.
-/// `StaticArrayElem` must have the same type in their keys and values.
-/// E.g, only `Num` in key and only `StaticVariant` for all elements.
+/// Keys of `StaticArrayElem` in fields must be of identical type
+/// (if one field has key `Num(u32)`, others must have only `Num(u32)`)
 ///
-/// Fields of `T` can be optional. `T` must have at least 1 field.
+/// Types of values are less strict - they must be of identical signature
+/// (`StaticVariant(Str)` in one field value and `StaticVariant(Num(u32))` in another is allowed).
+///
+/// Fields of `T` can be optional. There must be at least 1 field.
 ///
 /// Why is it used:
 /// Amount of elems and value types are known at comptime,
 /// so parsing messages doesn't require dynamic allocation for such arrays.
-/// It allows use of `StaticVariant` in arrays.
+/// It also allows use of `StaticVariant` in arrays.
 pub fn StaticArray(comptime T: type) type {
     const info = @typeInfo(T).@"struct";
 
     if (info.field_types.len == 0) @compileError("`StaticArray` must have at least 1 elem");
 
-    // Expect that all types of elem keys and values
-    // equal the first element type
+    // Expect that all types of elem keys and values equal the first element type
 
     comptime var ExpectedElemKeyType: type = undefined;
     comptime var ExpectedElemValueType: type = undefined;
 
     inline for (info.field_types, 0..) |ElemType, index| {
         const UnwrapElemType = switch (@typeInfo(ElemType)) {
-            .optional => |optional| optional.child,
+            .optional => |elem_info| elem_info.child,
             else => ElemType,
         };
         if (!isStaticArrayElem(UnwrapElemType)) @compileError("Expected `StaticArrayElem`, found " ++ @typeName(T));
 
-        const ElemKeyType = UnwrapElemType.KeyType;
+        const ElemKeyType = StaticArrayElemKeyType(UnwrapElemType);
         const ElemValueType = @FieldType(UnwrapElemType, "elem");
 
         if (index == 0) {
@@ -337,6 +337,10 @@ pub fn StaticArray(comptime T: type) type {
 }
 pub fn isStaticArray(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_STATIC_ARRAY__");
+}
+/// Returns the type of comptime keys of elements in `StaticArray`.
+pub fn StaticArrayKeyType(comptime T: type) type {
+    return T.ElemKeyType;
 }
 
 /// `key` is a comptime value of D-Bus type, used to
@@ -374,8 +378,12 @@ pub fn isStaticArrayElem(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_STATIC_ARRAY_ELEM__");
 }
 /// Returns the comptime key of `StaticArrayElem`.
-pub fn getStaticArrayElemKey(comptime E: type) E.KeyType {
+pub fn getStaticArrayElemKey(comptime E: type) E {
     return E.__ZBUS_ELEM_KEY__;
+}
+/// Returns type of the comptime key of a `StaticArrayElem`.
+pub fn StaticArrayElemKeyType(comptime T: type) type {
+    return T.KeyType;
 }
 
 /// `U` is a union of D-Bus types. Union must be tagged.
