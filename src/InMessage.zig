@@ -89,9 +89,9 @@ pub fn parse(gpa: mem.Allocator, reader: *Io.Reader) ParseError!@This() {
 }
 
 inline fn parseHeader(reader: *Io.Reader) Io.Reader.Error!struct {
-    endian: lang.Endian,
+    endian: u8,
     message_type: meta.BackingInt(message_types.MessageType),
-    flags: message_types.MessageFlags,
+    flags: @FieldType(Header, "flags"),
     version: u8,
     body_size: @FieldType(Header, "body_size"),
     serial: @FieldType(Header, "serial"),
@@ -109,11 +109,7 @@ inline fn parseHeader(reader: *Io.Reader) Io.Reader.Error!struct {
     };
     comptime var header_pos = 0;
 
-    const endian: lang.Endian = switch (header[header_pos]) {
-        'l' => .little,
-        'B' => .big,
-        else => ParseError.InvalidHeader,
-    };
+    const endian = header[header_pos];
     header_pos += 1;
 
     const message_type = header[header_pos];
@@ -128,7 +124,7 @@ inline fn parseHeader(reader: *Io.Reader) Io.Reader.Error!struct {
     const BodySizeType = @FieldType(Header, "body_size");
     const body_size = mem.readInt(
         BodySizeType,
-        header[header_pos..@sizeOf(BodySizeType)],
+        header[header_pos..][0..@sizeOf(BodySizeType)],
         endian,
     );
     header_pos += @sizeOf(BodySizeType);
@@ -136,7 +132,7 @@ inline fn parseHeader(reader: *Io.Reader) Io.Reader.Error!struct {
     const SerialType = @FieldType(Header, "serial");
     const serial = mem.readInt(
         SerialType,
-        header[header_pos..@sizeOf(SerialType)],
+        header[header_pos..][0..@sizeOf(SerialType)],
         endian,
     );
     header_pos += @sizeOf(SerialType);
@@ -168,7 +164,7 @@ fn ParseValueResult(comptime T: type) type {
         ///
         /// Includes padding bytes between elements of container types.
         ///
-        /// It's always less than or equal `input.len`.
+        /// It's guaranteed to be less than or equal `input.len`.
         size: usize,
     };
 }
@@ -181,6 +177,8 @@ pub const ParseValueError = error{
     TooLongStr,
     TooLongArray,
     VariantTypeMismatch,
+
+    UnknownStaticArrayElemKey,
 } || AlignInputError;
 /// Must not be called without calling `validateSignature` with `T` first.
 ///
@@ -191,12 +189,12 @@ pub const ParseValueError = error{
 ///   Garbage in padding doesn't break anything, but the spec says it's an error.
 ///
 /// If `T` isn't a D-Bus type, a compile error is shown.
-pub fn parseValue(comptime T: type, input: AlignInput(T), endian: lang.Endian) ParseValueError!T {
+pub fn parseValue(comptime T: type, input: AlignedInput(T), endian: lang.Endian) ParseValueError!T {
     const parsed_value = try parseValueInner(T, input, endian);
     return parsed_value.value;
 }
 
-fn parseValueInner(comptime T: type, input: AlignInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
+fn parseValueInner(comptime T: type, input: AlignedInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
     switch (T) {
         types.Bool => return parseBool(input, endian),
         types.UnixFd => return parseUnixFd(input, endian),
@@ -205,21 +203,21 @@ fn parseValueInner(comptime T: type, input: AlignInput(T), endian: lang.Endian) 
             if (types.isNum(T)) return parseNum(T, input, endian);
             if (types.isStruct(T)) return parseStruct(T, input, endian);
             if (types.isDictEntry(T)) return parseDictEntry(T, input, endian);
-            if (types.isVariant(T)) return parseStrLike(T, input, endian);
             if (types.isInArray(T)) return parseInArray(T, input, endian);
             if (types.isOutArray(T)) @compileError("Cannot use `OutArray` in `InMessage`");
+            if (types.isStaticArray(T)) return parseStaticArray(T, input, endian);
+            if (types.isStaticArrayElem(T))
+                // It's handled in `parseStaticArray`
+                @compileError("`StaticArrayElem` isn't allowed outside of `StaticArray`");
+            if (types.isVariant(T)) return parseVariant(T, input, endian);
             if (types.isStaticVariant(T)) return parseStaticVariant(T, input, endian);
-            // if (types.isStaticArray(T)) return parseStaticArray(T,input, endian);
-            // if (types.isStaticArrayEl(T))
-            //     // It's handled in `parseStaticArray`
-            //     @compileError("`StaticArrayEl` isn't allowed outside of `StaticArray`");
 
             @compileError("Expected a D-Bus type, found " ++ @typeName(T));
         },
     }
 }
 
-inline fn parseNum(comptime T: type, input: AlignInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
+inline fn parseNum(comptime T: type, input: AlignedInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
     const NumType = @FieldType(T, "num");
     const num_size = @sizeOf(NumType);
 
@@ -228,7 +226,7 @@ inline fn parseNum(comptime T: type, input: AlignInput(T), endian: lang.Endian) 
     return .{ .value = .init(num), .size = num_size };
 }
 
-inline fn parseBool(input: AlignInput(types.Bool), endian: lang.Endian) ParseValueError!ParseValueResult(types.Bool) {
+inline fn parseBool(input: AlignedInput(types.Bool), endian: lang.Endian) ParseValueError!ParseValueResult(types.Bool) {
     // `Bool` is encoded as `u32`
     const bool_size = @sizeOf(u32);
 
@@ -243,7 +241,7 @@ inline fn parseBool(input: AlignInput(types.Bool), endian: lang.Endian) ParseVal
     return .{ .value = .init(@"bool"), .size = bool_size };
 }
 
-inline fn parseUnixFd(input: AlignInput(types.UnixFd), endian: lang.Endian) ParseValueError!ParseValueResult(types.UnixFd) {
+inline fn parseUnixFd(input: AlignedInput(types.UnixFd), endian: lang.Endian) ParseValueError!ParseValueResult(types.UnixFd) {
     const IndexType = @FieldType(types.UnixFd, "index");
     const index_size = @sizeOf(IndexType);
 
@@ -255,7 +253,7 @@ inline fn parseUnixFd(input: AlignInput(types.UnixFd), endian: lang.Endian) Pars
 }
 
 /// Parses string-like type (`Str`, `ObjectPath` or `Signature`).
-inline fn parseStrLike(comptime T: type, input: AlignInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
+inline fn parseStrLike(comptime T: type, input: AlignedInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
     // Length of `Signature` is encoded as `u8`,
     // lengths of `Str` and `ObjectPath` are in `u32`
     const StrLenType = switch (T) {
@@ -289,7 +287,7 @@ inline fn parseStrLike(comptime T: type, input: AlignInput(T), endian: lang.Endi
     return .{ .value = try .init(str), .size = str_len_size + full_str_len };
 }
 
-inline fn parseStruct(comptime T: type, input: AlignInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
+inline fn parseStruct(comptime T: type, input: AlignedInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
     const StructType = @FieldType(T, "struct");
     const info = @typeInfo(StructType).@"struct";
 
@@ -298,7 +296,7 @@ inline fn parseStruct(comptime T: type, input: AlignInput(T), endian: lang.Endia
     var remaining_input = input;
 
     inline for (info.field_names, info.field_types, 0..) |field_name, FieldType, index| {
-        const aligned_input: AlignInput(FieldType) = switch (index) {
+        const aligned_input: AlignedInput(FieldType) = switch (index) {
             // The first field is already aligned by `Struct` alignment
             0 => input,
 
@@ -321,7 +319,7 @@ inline fn parseStruct(comptime T: type, input: AlignInput(T), endian: lang.Endia
     };
 }
 
-inline fn parseDictEntry(comptime T: type, input: AlignInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
+inline fn parseDictEntry(comptime T: type, input: AlignedInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
     const KeyType = @FieldType(T, "key");
     const ValueType = @FieldType(T, "value");
 
@@ -341,7 +339,8 @@ inline fn parseDictEntry(comptime T: type, input: AlignInput(T), endian: lang.En
     };
 }
 
-inline fn parseInArray(comptime T: type, input: AlignInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
+inline fn parseInArray(comptime T: type, input: AlignedInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
+    // TODO: add util for `InArray` elems type
     const ElemType = T.ElemType;
 
     const ArraySizeType = u32;
@@ -350,16 +349,18 @@ inline fn parseInArray(comptime T: type, input: AlignInput(T), endian: lang.Endi
 
     const array_size = mem.readInt(ArraySizeType, input[0..@sizeOf(ArraySizeType)], endian);
 
-    var remaining_input = input[@sizeOf(ArraySizeType)..];
+    const remaining_input = input[@sizeOf(ArraySizeType)..];
 
+    // In accordance with the spec, there must be alignment of
+    // the first value even if array has no elements
     const first_elem_padding = getValuePadding(input.ptr, ElemType);
     if (first_elem_padding < remaining_input.len) return ParseValueError.UnexpectedEnd;
 
-    remaining_input = remaining_input[first_elem_padding];
+    const aligned_input = remaining_input[first_elem_padding..];
 
-    if (array_size > remaining_input.len) return ParseValueError.TooLongArray;
+    if (array_size > aligned_input.len) return ParseValueError.TooLongArray;
 
-    const elems = remaining_input[0..array_size];
+    const elems = aligned_input[0..array_size];
 
     return .{
         .value = try .init(elems),
@@ -367,7 +368,80 @@ inline fn parseInArray(comptime T: type, input: AlignInput(T), endian: lang.Endi
     };
 }
 
-inline fn parseVariant(comptime T: type, input: AlignInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
+/// Also handles `StaticArrayElem` inside the array.
+inline fn parseStaticArray(comptime T: type, input: AlignedInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
+    const StructType = @FieldType(T, "struct");
+    const info = @typeInfo(StructType).@"struct";
+    const ElemKeyType = types.StaticArrayKeyType(T);
+
+    const ArraySizeType = u32;
+
+    if (@sizeOf(ArraySizeType) > input.len) return ParseValueError.UnexpectedEnd;
+    const array_size = mem.readInt(
+        ArraySizeType,
+        input[0..@sizeOf(ArraySizeType)],
+        endian,
+    );
+
+    var remaining_input = input[@sizeOf(ArraySizeType)..];
+
+    if (array_size > remaining_input.len) return ParseValueError.UnexpectedEnd;
+    remaining_input = remaining_input[0..array_size];
+
+    var @"struct": StructType = undefined;
+
+    // Initialize nullable fields with `null`
+    inline for (info.field_names, info.field_names) |field_name, ElemType|
+        if (@typeInfo(ElemType) == .optional) {
+            @field(@"struct", field_name) = null;
+        };
+
+    const FirstElemType = info.field_types[0];
+    const UnwrapFirstElemType = switch (@typeInfo(info.field_types[0])) {
+        .optional => |elem_info| elem_info.child,
+        else => FirstElemType,
+    };
+
+    elems: while (remaining_input.len != 0) {
+        const elem_padding = getValuePadding(input.ptr, UnwrapFirstElemType);
+        const aligned_input = try alignInput(ElemKeyType, remaining_input, elem_padding);
+
+        // Key is aligned by `StaticArrayElem` alignment
+        const parsed_key = parseValueInner(ElemKeyType, aligned_input, endian);
+
+        remaining_input = aligned_input[parsed_key.size..];
+
+        inline for (info.field_names, info.field_types) |field_name, ElemType| {
+            const UnwrapElemType = switch (@typeInfo(ElemType)) {
+                .optional => |elem_info| elem_info.child,
+                else => ElemType,
+            };
+
+            const elem_key = types.getStaticArrayElemKey(UnwrapElemType);
+
+            if (elem_key == parsed_key.value) {
+                const value_padding = getValuePadding(input.ptr, ElemKeyType);
+                const aligned_remaining_input = try alignInput(T, remaining_input, value_padding);
+
+                const parsed_value = try parseValueInner(ElemKeyType, aligned_remaining_input, endian);
+                @field(@"struct", field_name) = .init(parsed_value.value);
+
+                remaining_input = aligned_remaining_input[parsed_value.size..];
+
+                continue :elems;
+            }
+        }
+
+        return ParseValueError.UnknownStaticArrayKey;
+    }
+
+    return .{
+        .value = .init(@"struct"),
+        .size = @intFromPtr(remaining_input.ptr) - @intFromPtr(input.ptr),
+    };
+}
+
+inline fn parseVariant(comptime T: type, input: AlignedInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
     const UnionType = @FieldType(T, "variant");
     const info = @typeInfo(UnionType).@"union";
 
@@ -397,7 +471,7 @@ inline fn parseVariant(comptime T: type, input: AlignInput(T), endian: lang.Endi
     return ParseValueError.VariantTypeMismatch;
 }
 
-inline fn parseStaticVariant(comptime T: type, input: AlignInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
+inline fn parseStaticVariant(comptime T: type, input: AlignedInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
     const VariantType = @FieldType(T, "variant");
 
     const variant_signature: types.Signature = comptime try .init(types.signatureFromType(T));
@@ -420,7 +494,7 @@ inline fn parseStaticVariant(comptime T: type, input: AlignInput(T), endian: lan
 
 /// Returns type of aligned input slice
 /// with alignment of D-Bus type `T`.
-fn AlignInput(comptime T: type) type {
+fn AlignedInput(comptime T: type) type {
     return []align(types.alignmentFromType(T)) const u8;
 }
 
@@ -428,7 +502,7 @@ const AlignInputError = error{UnexpectedEnd};
 /// Returns a slice of `input`, where `ptr` is aligned forward with `padding`.
 ///
 /// Value of type `T` can be safely read with correct alignment from `aligned_input[0..]`.
-inline fn alignInput(comptime T: type, input: []const u8, padding: usize) AlignInputError!AlignInput(T) {
+inline fn alignInput(comptime T: type, input: []const u8, padding: usize) AlignInputError!AlignedInput(T) {
     if (padding > input.len) return AlignInputError.UnexpectedEnd;
 
     return @alignCast(input[padding..]);
