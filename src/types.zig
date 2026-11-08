@@ -230,6 +230,10 @@ pub fn InArray(comptime E: type) type {
 pub fn isInArray(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_IN_ARRAY__");
 }
+/// Returns the type of elements of an `InArray`.
+pub fn InArrayElemType(comptime T: type) type {
+    return T.ElemType;
+}
 
 /// Array to be sent in an `OutMessage`.
 pub fn OutArray(comptime E: type) type {
@@ -272,11 +276,10 @@ pub fn isOutArray(comptime T: type) bool {
 /// Not an official D-Bus type. Under the hood, it's a D-Bus array of structs.
 ///
 /// `T` is a zig struct with `StaticArrayElem` in fields.
-/// Keys of `StaticArrayElem` in fields must be of identical type
-/// (if one field has key `Num(u32)`, others must have only `Num(u32)`)
 ///
-/// Types of values are less strict - they must be of identical signature
-/// (`StaticVariant(Str)` in one field value and `StaticVariant(Num(u32))` in another is allowed).
+/// Keys and values of elements (`StaticArrayElem`) must have identical type signatures.
+/// That is, if one element has `Num(u16)` in key, and another element
+/// has there `Num(i32)` (which has a different signature), a compile error is shown.
 ///
 /// Fields of `T` can be optional. There must be at least 1 field.
 ///
@@ -338,7 +341,7 @@ pub fn StaticArray(comptime T: type) type {
 pub fn isStaticArray(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_STATIC_ARRAY__");
 }
-/// Returns the type of comptime keys of elements in `StaticArray`.
+/// Returns the type of comptime keys of elements of a `StaticArray`.
 pub fn StaticArrayKeyType(comptime T: type) type {
     return T.ElemKeyType;
 }
@@ -553,8 +556,8 @@ fn signatureFromTypeInner(
                 if (next_array_depth > MAX_ARRAY_DEPTH)
                     @compileError("Reached max array depth");
 
-                const ElemType = if (isInArray())
-                    T.ElemType
+                const ElemType = if (isInArray(T))
+                    InArrayElemType(T)
                 else
                     meta.Child(@FieldType(T, "array"));
 
@@ -619,5 +622,3 @@ pub inline fn getAlignmentPadding(addr: usize, comptime alignment: usize) usize 
     // 11 + 5 = 16 -> Correct alignment
     return -addr & comptime (alignment - 1);
 }
-
-// TODO: parse static `InArray` via lazy iterator instead of having a separate `StaticArray`

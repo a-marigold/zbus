@@ -282,8 +282,7 @@ inline fn parseDictEntry(comptime T: type, input: AlignedInput(T), endian: lang.
 }
 
 inline fn parseInArray(comptime T: type, input: AlignedInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
-    // TODO: add util for `InArray` elems type
-    const ElemType = T.ElemType;
+    const ElemType = types.InArrayElemType(T);
 
     const ArraySizeType = u32;
 
