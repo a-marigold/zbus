@@ -11,10 +11,12 @@ const message_types = @import("message_types.zig");
 
 /// If the message doesn't need a body, `Body` can be `null`.
 pub fn OutMessage(comptime Body: ?type) type {
-    return struct {
+    if (Body) |BodyType| return struct {
         header: Header,
-        body: if (Body) |BodyType| BodyType else @TypeOf(null), // TODO: use `void` instead
+        body: BodyType,
     };
+
+    return struct { header: Header };
 }
 
 /// Doesn't contain all the fields from the spec.
