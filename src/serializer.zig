@@ -5,9 +5,10 @@ const lang = std.lang;
 const meta = std.meta;
 const types = @import("types.zig");
 const message_types = @import("message_types.zig");
+const utils = @import("utils.zig");
 const builtin = @import("builtin");
 
-const ENDIAN = builtin.target.cpu.arch.endian();
+const NATIVE_ENDIAN = builtin.target.cpu.arch.endian();
 
 /// Serializes `OutMessage` into bytes as per
 /// the spec and writes the result to `writer`.
@@ -16,7 +17,7 @@ const ENDIAN = builtin.target.cpu.arch.endian();
 pub fn serializeMessage(writer: *Io.Writer, out_message: anytype) !void {
     const header = out_message.header;
 
-    const serialized_endian: u8 = switch (ENDIAN) {
+    const serialized_endian: u8 = switch (NATIVE_ENDIAN) {
         .little => 'l',
         .big => 'B',
     };
@@ -29,14 +30,14 @@ pub fn serializeMessage(writer: *Io.Writer, out_message: anytype) !void {
     }) |byte| try writer.writeByte(byte);
 
     inline for (.{ header.serial, header.bodySize }) |int|
-        try writer.writeInt(@TypeOf(int), int, ENDIAN);
+        try writer.writeInt(@TypeOf(int), int, NATIVE_ENDIAN);
 
     // `writer` is already aligned by the prev fields
     // to serialize `StaticArray` of `header.fields`
-    try serializeValue(writer, header.fields, ENDIAN);
+    try serializeValue(writer, header.fields, NATIVE_ENDIAN);
 
     const BodyType = @FieldType(@TypeOf(out_message), "body");
-    if (BodyType != @TypeOf(null)) try serializeValue(writer, out_message.body, ENDIAN);
+    if (BodyType != @TypeOf(null)) try serializeValue(writer, out_message.body, NATIVE_ENDIAN);
 }
 
 /// Recursively (for containers) serializes `value` and writes the result to `writer`.
@@ -199,7 +200,7 @@ inline fn serializeOutArray(writer: *Io.Writer, value: anytype, comptime endian:
     var elem_index: usize = 0;
     while (true) : (elem_index += 1) {
         // In accordance with the spec, there must be alignment of
-        // the first value after even if array has no elements.
+        // the first value even if array has no elements.
         // So, do `while(true)` with at least 1 `alignValue`
         const elem_padding = try alignValue(writer, ElemType, pos);
         new_pos += elem_padding;
@@ -213,7 +214,7 @@ inline fn serializeOutArray(writer: *Io.Writer, value: anytype, comptime endian:
     return new_pos;
 }
 
-/// Also handles `StaticArrayElem`.
+/// Also handles `StaticArrayElem` inside the array.
 inline fn serializeStaticArray(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
     const info = @typeInfo(@FieldType(value, "struct")).@"struct";
 
@@ -267,18 +268,18 @@ inline fn serializeVariant(writer: *Io.Writer, value: anytype, comptime endian: 
     }
 }
 inline fn serializeStaticVariant(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
-    const UnionType = @FieldType(@TypeOf(value), "variant");
+    const VariantType = @FieldType(@TypeOf(value), "variant");
 
     var new_pos = pos;
 
     // `Variant` is encoded as `Signature` of
     // the variant value, followed by that value
-    const variant_signature: types.Signature = comptime .init(types.signatureFromType(UnionType));
+    const variant_signature: types.Signature = comptime .init(types.signatureFromType(VariantType));
 
     // `Signature` doesn't require alignment 'cause it starts from `u8` (the length)
     new_pos = try serializeStrLike(writer, variant_signature, endian, new_pos);
 
-    const variant_padding = try alignValue(writer, UnionType, endian, new_pos);
+    const variant_padding = try alignValue(writer, VariantType, endian, new_pos);
     new_pos += variant_padding;
     new_pos = try serializeValueInner(writer, value.variant, endian, new_pos);
 
@@ -396,10 +397,10 @@ fn countDynamicValueSize(value: anytype) usize {
                 inline for (info.field_names, info.field_types) |field_name, ElemType| {
                     const elem = @field(value.@"struct", field_name);
 
-                    const key = types.getStaticArrayElemKey(ElemType);
+                    const elem_key = types.getStaticArrayElemKey(ElemType);
                     const elem_value = elem.elem;
 
-                    size += countValueSize(key) + countValueSize(elem_value);
+                    size += countValueSize(elem_key) + countValueSize(elem_value);
                 }
 
                 return size;
@@ -447,7 +448,7 @@ fn countDynamicValueSize(value: anytype) usize {
 ///
 /// `pos` is the number of totally written bytes to `writer`.
 inline fn alignValue(writer: *Io.Writer, comptime V: type, pos: usize) Io.Writer.Error!void {
-    const padding = types.getAlignmentPadding(pos, types.alignmentFromType(V));
+    const padding = utils.getAlignmentPadding(pos, types.alignmentFromType(V));
 
     try alignWriter(writer, padding);
 

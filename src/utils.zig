@@ -13,6 +13,15 @@ pub inline fn getAlignmentPadding(addr: usize, comptime alignment: usize) usize 
     // 11 + 5 = 16 -> Correct alignment
     return -addr & comptime (alignment - 1);
 }
+/// If `T` is `?SomeType`, returns `SomeType`.
+///
+/// If `T` isn't nullable, returns unchanged `T`.
+pub inline fn UnwrapOptional(comptime T: type) type {
+    return switch (@typeInfo(T)) {
+        .optional => |info| info.child,
+        else => T,
+    };
+}
 
 pub inline fn getUid() u32 {
     return linux.getuid();

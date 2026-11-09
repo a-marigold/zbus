@@ -12,7 +12,7 @@
 const std = @import("std");
 const mem = std.mem;
 const meta = std.meta;
-
+const utils = @import("utils.zig");
 const MIBIBYTE_SIZE = 1_048_576;
 
 // TODO: make all private fields, even types, start and end with '__'
@@ -300,10 +300,8 @@ pub fn StaticArray(comptime T: type) type {
     comptime var ExpectedElemValueType: type = undefined;
 
     inline for (info.field_types, 0..) |ElemType, index| {
-        const UnwrapElemType = switch (@typeInfo(ElemType)) {
-            .optional => |elem_info| elem_info.child,
-            else => ElemType,
-        };
+        const UnwrapElemType = utils.UnwrapOptional(ElemType);
+
         if (!isStaticArrayElem(UnwrapElemType)) @compileError("Expected `StaticArrayElem`, found " ++ @typeName(T));
 
         const ElemKeyType = StaticArrayElemKeyType(UnwrapElemType);

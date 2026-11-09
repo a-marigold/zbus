@@ -318,19 +318,15 @@ inline fn parseStaticArray(comptime T: type, input: AlignedInput(T), endian: lan
     var @"struct": StructType = undefined;
 
     // Initialize nullable fields with `null`
-    inline for (info.field_names, info.field_names) |field_name, ElemType|
+    inline for (info.field_names, info.field_types) |field_name, ElemType|
         if (@typeInfo(ElemType) == .optional) {
             @field(@"struct", field_name) = null;
         };
 
-    const FirstElemType = info.field_types[0];
-    const UnwrapFirstElemType = switch (@typeInfo(info.field_types[0])) {
-        .optional => |elem_info| elem_info.child,
-        else => FirstElemType,
-    };
+    const UnwrapFirstElemType = utils.UnwrapOptional(info.field_types[0]);
 
     elems: while (remaining_input.len != 0) {
-        const elem_padding = getValuePadding(input.ptr, UnwrapFirstElemType);
+        const elem_padding = getValuePadding(@intFromPtr(input.ptr), UnwrapFirstElemType);
         const aligned_input = try alignInput(ElemKeyType, remaining_input, elem_padding);
 
         // Key is aligned by `StaticArrayElem` alignment
@@ -339,15 +335,12 @@ inline fn parseStaticArray(comptime T: type, input: AlignedInput(T), endian: lan
         remaining_input = aligned_input[parsed_key.size..];
 
         inline for (info.field_names, info.field_types) |field_name, ElemType| {
-            const UnwrapElemType = switch (@typeInfo(ElemType)) {
-                .optional => |elem_info| elem_info.child,
-                else => ElemType,
-            };
+            const UnwrapElemType = utils.UnwrapOptional(ElemType);
 
             const elem_key = types.getStaticArrayElemKey(UnwrapElemType);
 
             if (elem_key == parsed_key.value) {
-                const value_padding = getValuePadding(input.ptr, ElemKeyType);
+                const value_padding = getValuePadding(@intFromPtr(input.ptr), ElemKeyType);
                 const aligned_remaining_input = try alignInput(T, remaining_input, value_padding);
 
                 const ElemValueType = @FieldType(UnwrapElemType, "elem");
