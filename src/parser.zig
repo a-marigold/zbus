@@ -6,89 +6,77 @@ const meta = std.meta;
 const types = @import("types.zig");
 const message_types = @import("message_types.zig");
 const InMessage = @import("InMessage.zig");
+const utils = @import("utils.zig");
 
-pub const ParseError = error{
-    InvalidHeaderFormat,
-    InvalidMessageType,
-    UnsupportedVersion,
-} || ParseValueError || mem.Allocator.Error;
-pub fn parseMessage(gpa: mem.Allocator, reader: *Io.Reader) ParseError!InMessage {
-    const header = try parseHeader(reader);
+/// Size of content of header before `Header.Fields`.
+///
+/// B = the first four `u8`
+/// U = the following `u32`
+/// S = size of fields as `u32`
+///
+/// B + U + S = 16 bytes.
+const HEADER_START_SIZE = 16;
 
-    const fields_input, const body_input = block: {
-        const input = try gpa.alloc(u8, header.fields_size + header.body_size);
+/// Header start has `u32` integers,
+/// so alignment is the alignment of `u32`.
+const HEADER_START_ALIGNMENT = @alignOf(u32);
 
-        break :block .{
-            input[0..header.fields_size],
-            input[header.fields_size..header.body_size],
-        };
-    };
-
-    const fields = try parseValue(fields_input, InMessage.Header.Fields, header.endian);
-
-    _ = body_input;
-    _ = fields;
-}
-
-inline fn parseHeader(reader: *Io.Reader) Io.Reader.Error!struct {
-    endian: u8,
-    message_type: meta.BackingInt(message_types.MessageType),
-    flags: @FieldType(InMessage.Header, "flags"),
+const HeaderStart = struct {
+    endian: lang.Endian,
+    message_type: message_types.MessageType,
+    flags: u8,
     version: u8,
-    body_size: @FieldType(InMessage.Header, "body_size"),
-    serial: @FieldType(InMessage.Header, "serial"),
+    body_size: u32,
+    serial: u32,
     fields_size: u32,
-} {
-    // (four `u8`) + (two `u32`) + (size of fields as `u32`)
-    const header_size = 16;
+};
 
-    const header_input = block: {
-        // Copy to stack for correct integers alignment
-        var buffer: [header_size]u8 align(@sizeOf(u32)) = undefined;
-        try reader.readSliceAll(&buffer);
+const ParseHeaderStartError = error{InvalidHeaderFormat};
+inline fn parseHeaderStart(input: *align(HEADER_START_ALIGNMENT) const [HEADER_START_SIZE]u8) ParseHeaderStartError!HeaderStart {
+    comptime var pos = 0;
 
-        break :block buffer;
+    const endian: lang.Endian = switch (input[pos]) {
+        'l' => .little,
+        'B' => .big,
+        else => return ParseHeaderStartError.InvalidHeaderFormat,
     };
-    comptime var header_pos = 0;
+    pos += 1;
 
-    const endian = header_input[header_pos];
-    header_pos += 1;
+    const message_type = input[pos];
+    pos += 1;
 
-    const message_type = header_input[header_pos];
-    header_pos += 1;
+    const flags = input[pos];
+    pos += 1;
 
-    const flags = header_input[header_pos];
-    header_pos += 1;
-
-    const version = header_input[header_pos];
-    header_pos += 1;
+    const version = input[pos];
+    pos += 1;
 
     const BodySizeType = @FieldType(InMessage.Header, "body_size");
     const body_size = mem.readInt(
         BodySizeType,
-        header_input[header_pos..][0..@sizeOf(BodySizeType)],
+        input[pos..][0..@sizeOf(BodySizeType)],
         endian,
     );
-    header_pos += @sizeOf(BodySizeType);
+    pos += @sizeOf(BodySizeType);
 
     const SerialType = @FieldType(InMessage.Header, "serial");
     const serial = mem.readInt(
         SerialType,
-        header_input[header_pos..][0..@sizeOf(SerialType)],
+        input[pos..][0..@sizeOf(SerialType)],
         endian,
     );
-    header_pos += @sizeOf(SerialType);
+    pos += @sizeOf(SerialType);
 
     const FieldsSizeType = u32;
     const fields_size = mem.readInt(
         FieldsSizeType,
-        header_input[header_pos..@sizeOf(FieldsSizeType)],
+        input[pos..][0..@sizeOf(FieldsSizeType)],
         endian,
     );
 
     return .{
         .endian = endian,
-        .message_type = message_type,
+        .message_type = @fromBackingInt(message_type),
         .flags = flags,
         .version = version,
         .body_size = body_size,
