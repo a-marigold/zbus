@@ -12,10 +12,12 @@ const mem = std.mem;
 const math = std.math;
 const fmt = std.fmt;
 const posix = std.posix;
-const linux = std.os.linux;
 const InMessage = @import("InMessage.zig");
 const out_message = @import("out_message.zig");
 const OutMessage = out_message.OutMessage;
+const parser = @import("parser.zig");
+const serializer = @import("serializer.zig");
+const utils = @import("utils.zig");
 
 const SYSTEM_BUS_PATH = "/var/run/dbus/system_bus_socket";
 const SYSTEM_BUS_ENV_NAME = "DBUS_SYSTEM_BUS_ADDRESS";
@@ -32,7 +34,7 @@ pub const InitError = error{
 } || AuthError;
 /// Creates a socket, connects to the D-Bus broker by `busPath`,
 /// authentificates the connection and says Hello.
-pub fn init(io: Io, bus_path: []const u8, options: Options) InitError!@This() {
+pub fn init(gpa: mem.Allocator, io: Io, bus_path: []const u8, options: Options) InitError!@This() {
     const socket = net.UnixAddress.init(bus_path) catch return InitError.BusPathTooLong;
 
     const stream = socket.connect(io) catch return InitError.ConnectFail;
@@ -53,19 +55,19 @@ pub fn init(io: Io, bus_path: []const u8, options: Options) InitError!@This() {
             .flags = 0,
             .serial = 1,
             .fields = .init(.{
-                .object_path = .init(.init("/org/freedesktop/DBus")),
+                .object_path = .init(.init(comptime try .init("/org/freedesktop/DBus"))),
                 .interface = .init(.init("org.freedesktop.DBus")),
                 .method = .init(.init("Hello")),
                 .destination = .init(.init("")),
             }),
         },
-        .body = null,
     };
 
-    hello_message.serialize(io_writer) catch return InitError.SendHelloFail;
+    serializer.serializeMessage(writer, hello_message) catch return InitError.SendHelloFail;
     io_writer.flush() catch return InitError.SendHelloFail;
 
     // TODO: handle reply
+    const hello_response = try parser.parseMessage(gpa, io_reader);
 
     return .{
         .stream = stream,
@@ -93,7 +95,7 @@ inline fn authentificate(reader: *Io.Reader, writer: *Io.Writer, comptime is_neg
 
     // `AUTH EXTERNAL` command
     const hex_ascii_uid = block: {
-        const uid = getUid();
+        const uid = utils.getUid();
 
         // UID number first in ASCII,
         // then every its ASCII code unit
@@ -113,8 +115,8 @@ inline fn authentificate(reader: *Io.Reader, writer: *Io.Writer, comptime is_neg
     writer.flush() catch return AuthError.AuthExternalFail;
 
     const auth_response = reader.takeDelimiterInclusive('\n') catch return AuthError.AuthExternalFail;
-    if (auth_response.len > 2 and
-        auth_response[0] == 'O' and auth_response[1] == 'K') return AuthError.AuthExternalFail;
+    if (auth_response.len < 2 or
+        (auth_response[0] == 'O' and auth_response[1] == 'K')) return AuthError.AuthExternalFail;
 
     // `NEGOTIATE_UNIX_FD` command
     if (comptime is_negotiate_unix_fd) {
@@ -179,8 +181,4 @@ pub fn getBusPath(comptime bus_type: BusType, env: process.Environ) BusPathError
         return path[abstract_path_key..];
 
     return BusPathError.InvalidPath;
-}
-
-inline fn getUid() u32 {
-    return linux.getuid();
 }

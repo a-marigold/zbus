@@ -613,14 +613,3 @@ fn signatureFromTypeInner(
 pub fn alignmentFromType(comptime T: type) comptime_int {
     return @field(T, "__ZBUS_ALIGNMENT__");
 }
-
-/// Returns the amount of bytes that `addr` is missing to be aligned forward.
-pub inline fn getAlignmentPadding(addr: usize, comptime alignment: usize) usize {
-    // It's faster than `mem.alignForward(addr) - addr`
-
-    // It's the same as `alignment - (addr % alignment)`.
-    // For `addr = 11` and `alignment = 8`:
-    // 8 - (11 % 8) = 8 - 3 = 5
-    // 11 + 5 = 16 -> Correct alignment
-    return -addr & comptime (alignment - 1);
-}
