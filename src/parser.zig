@@ -100,8 +100,8 @@ fn ParseValueResult(comptime T: type) type {
 }
 
 pub const ParseValueError = error{
-    /// The input ended too early so the data is interrupted
-    UnexpectedEnd,
+    /// The input ended too early so the being parsed data is invalid.
+    EndOfInput,
 
     InvalidValue,
     TooLongStr,
@@ -110,18 +110,16 @@ pub const ParseValueError = error{
 
     UnknownStaticArrayElemKey,
 } || AlignInputError;
-/// Must not be called without calling `validateSignature` with `T` first.
+/// Must not be called without calling `validateSignature` with `T` first to check compile errors.
+///
+/// If `T` isn't a D-Bus type, a compile error is shown.
 ///
 /// - UTF-8 in string-like values isn't validated.
 /// - Contents of `ObjectPath` and `Signature` isn't validated.
-/// - Alignment padding bytes aren't validated. If `input` contains a garbage instead of zeros
-///   in padding bytes between values, this function doesn't report out.
+/// - Content of alignment padding bytes isn't validated.
 ///   Garbage in padding doesn't break anything, but the spec says it's an error.
-///
-/// If `T` isn't a D-Bus type, a compile error is shown.
-pub fn parseValue(comptime T: type, input: AlignedInput(T), endian: lang.Endian) ParseValueError!T {
-    const parsed_value = try parseValueInner(T, input, endian);
-    return parsed_value.value;
+pub inline fn parseValue(comptime T: type, input: AlignedInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
+    return parseValueInner(T, input, endian);
 }
 
 fn parseValueInner(comptime T: type, input: AlignedInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
@@ -160,7 +158,7 @@ inline fn parseBool(input: AlignedInput(types.Bool), endian: lang.Endian) ParseV
     // `Bool` is encoded as `u32`
     const bool_size = @sizeOf(u32);
 
-    if (input.len < bool_size) return ParseValueError.UnexpectedEnd;
+    if (input.len < bool_size) return ParseValueError.EndOfInput;
 
     const @"bool" = switch (mem.readInt(u32, input[0..bool_size], endian)) {
         0 => false,
@@ -175,7 +173,7 @@ inline fn parseUnixFd(input: AlignedInput(types.UnixFd), endian: lang.Endian) Pa
     const IndexType = @FieldType(types.UnixFd, "index");
     const index_size = @sizeOf(IndexType);
 
-    if (input.len < index_size) return ParseValueError.UnexpectedEnd;
+    if (input.len < index_size) return ParseValueError.EndOfInput;
 
     const index = mem.readInt(IndexType, input[0..index_size], endian);
 
@@ -196,7 +194,7 @@ inline fn parseStrLike(comptime T: type, input: AlignedInput(T), endian: lang.En
     const null_terminator_size = 1;
 
     const min_str_size = str_len_size + null_terminator_size;
-    if (min_str_size > input.len) return ParseValueError.UnexpectedEnd;
+    if (min_str_size > input.len) return ParseValueError.EndOfInput;
 
     const content_len: usize = switch (StrLenType) {
         u8 => input[0],
@@ -274,7 +272,7 @@ inline fn parseInArray(comptime T: type, input: AlignedInput(T), endian: lang.En
 
     const ArraySizeType = u32;
 
-    if (@sizeOf(ArraySizeType) > input.len) return ParseValueError.UnexpectedEnd;
+    if (@sizeOf(ArraySizeType) > input.len) return ParseValueError.EndOfInput;
 
     const array_size = mem.readInt(ArraySizeType, input[0..@sizeOf(ArraySizeType)], endian);
 
@@ -283,7 +281,7 @@ inline fn parseInArray(comptime T: type, input: AlignedInput(T), endian: lang.En
     // In accordance with the spec, there must be alignment of
     // the first value even if array has no elements
     const first_elem_padding = getValuePadding(input.ptr, ElemType);
-    if (first_elem_padding < remaining_input.len) return ParseValueError.UnexpectedEnd;
+    if (first_elem_padding < remaining_input.len) return ParseValueError.EndOfInput;
 
     const aligned_input = remaining_input[first_elem_padding..];
 
@@ -305,7 +303,7 @@ inline fn parseStaticArray(comptime T: type, input: AlignedInput(T), endian: lan
 
     const ArraySizeType = u32;
 
-    if (@sizeOf(ArraySizeType) > input.len) return ParseValueError.UnexpectedEnd;
+    if (@sizeOf(ArraySizeType) > input.len) return ParseValueError.EndOfInput;
     const array_size = mem.readInt(
         ArraySizeType,
         input[0..@sizeOf(ArraySizeType)],
@@ -314,7 +312,7 @@ inline fn parseStaticArray(comptime T: type, input: AlignedInput(T), endian: lan
 
     var remaining_input = input[@sizeOf(ArraySizeType)..];
 
-    if (array_size > remaining_input.len) return ParseValueError.UnexpectedEnd;
+    if (array_size > remaining_input.len) return ParseValueError.EndOfInput;
     remaining_input = remaining_input[0..array_size];
 
     var @"struct": StructType = undefined;
@@ -336,7 +334,7 @@ inline fn parseStaticArray(comptime T: type, input: AlignedInput(T), endian: lan
         const aligned_input = try alignInput(ElemKeyType, remaining_input, elem_padding);
 
         // Key is aligned by `StaticArrayElem` alignment
-        const parsed_key = parseValueInner(ElemKeyType, aligned_input, endian);
+        const parsed_key = try parseValueInner(ElemKeyType, aligned_input, endian);
 
         remaining_input = aligned_input[parsed_key.size..];
 
@@ -352,7 +350,9 @@ inline fn parseStaticArray(comptime T: type, input: AlignedInput(T), endian: lan
                 const value_padding = getValuePadding(input.ptr, ElemKeyType);
                 const aligned_remaining_input = try alignInput(T, remaining_input, value_padding);
 
-                const parsed_value = try parseValueInner(ElemKeyType, aligned_remaining_input, endian);
+                const ElemValueType = @FieldType(UnwrapElemType, "elem");
+
+                const parsed_value = try parseValueInner(ElemValueType, aligned_remaining_input, endian);
                 @field(@"struct", field_name) = .init(parsed_value.value);
 
                 remaining_input = aligned_remaining_input[parsed_value.size..];
@@ -427,12 +427,12 @@ fn AlignedInput(comptime T: type) type {
     return []align(types.alignmentFromType(T)) const u8;
 }
 
-const AlignInputError = error{UnexpectedEnd};
+const AlignInputError = error{EndOfInput};
 /// Returns a slice of `input`, where `ptr` is aligned forward with `padding`.
 ///
 /// Value of type `T` can be safely read with correct alignment from `aligned_input[0..]`.
 inline fn alignInput(comptime T: type, input: []const u8, padding: usize) AlignInputError!AlignedInput(T) {
-    if (padding > input.len) return AlignInputError.UnexpectedEnd;
+    if (padding > input.len) return AlignInputError.EndOfInput;
 
     return @alignCast(input[padding..]);
 }
@@ -440,5 +440,5 @@ inline fn alignInput(comptime T: type, input: []const u8, padding: usize) AlignI
 /// Returns alignment padding of type of value `V`
 /// to be added to `inputAddr` to get aligned input.
 inline fn getValuePadding(input_addr: usize, comptime V: type) usize {
-    return types.getAlignmentPadding(input_addr, types.alignmentFromType(V));
+    return utils.getAlignmentPadding(input_addr, types.alignmentFromType(V));
 }
