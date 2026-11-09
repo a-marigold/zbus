@@ -2,8 +2,8 @@
 
 const std = @import("std");
 const lang = std.lang;
-const types = @import("types.zig");
-const message_types = @import("message_types.zig");
+const types = @import("../types.zig");
+const message_types = @import("types.zig");
 
 header: Header,
 body: []const u8,
@@ -23,7 +23,7 @@ pub const Header = struct {
 
     /// See `MessageTypes`.
     ///
-    /// Unknown types (that don't match any of `MessageTypes`) must be ignored.
+    /// Unknown types (`_` field of `MessageType` enum) must be ignored.
     message_type: message_types.MessageType,
 
     /// `0` means no flag is selected.

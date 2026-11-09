@@ -1,7 +1,7 @@
 //! Outgoing message.
 
-const types = @import("types.zig");
-const message_types = @import("message_types.zig");
+const types = @import("../types.zig");
+const message_types = @import("types.zig");
 
 /// If the message doesn't need a body, `Body` can be `null`.
 pub fn OutMessage(comptime Body: ?type) type {
