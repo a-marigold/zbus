@@ -11,6 +11,11 @@ pub const MessageType = enum(u8) {
     MethodReturn = 2,
     Error = 3,
     Signal = 4,
+    /// Unknown message type.
+    ///
+    /// If this appears in an incoming message,
+    /// the whole message must be ignored.
+    _,
 };
 pub const MessageFlags = struct {
     pub const NO_REPLY_EXPECTED = 0x1;

@@ -8,7 +8,7 @@ const message_types = @import("message_types.zig");
 header: Header,
 body: []const u8,
 
-const Header = struct {
+pub const Header = struct {
     // TODO: consider `unsupported endian` error
 
     /// Endianness of bytes in the header and the body.
@@ -21,6 +21,9 @@ const Header = struct {
     /// - Sizes of arrays
     endian: lang.Endian,
 
+    /// See `MessageTypes`.
+    ///
+    /// Unknown types (that don't match any of `MessageTypes`) must be ignored.
     message_type: message_types.MessageType,
 
     /// `0` means no flag is selected.

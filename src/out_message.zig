@@ -1,20 +1,15 @@
 //! Outgoing message.
 
-const std = @import("std");
-const mem = std.mem;
-const Io = std.Io;
-const lang = std.lang;
-const meta = std.meta;
-const builtin = @import("builtin");
 const types = @import("types.zig");
 const message_types = @import("message_types.zig");
 
 /// If the message doesn't need a body, `Body` can be `null`.
 pub fn OutMessage(comptime Body: ?type) type {
-    if (Body) |BodyType| return struct {
-        header: Header,
-        body: BodyType,
-    };
+    if (Body) |BodyType|
+        return struct {
+            header: Header,
+            body: BodyType,
+        };
 
     return struct { header: Header };
 }
@@ -24,11 +19,13 @@ pub fn OutMessage(comptime Body: ?type) type {
 /// Instead, some fields are computed automatically during serialization.
 const Header = struct {
     /// Type of the message.
+    ///
+    /// See `MessageTypes`.
     message_type: message_types.MessageType,
 
     /// `0` means no flag is selected.
     ///
-    /// See `message_types.MessageType`.
+    /// See `MessageFlags`.
     flags: u8,
 
     /// Serial number of the message.
