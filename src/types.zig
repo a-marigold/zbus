@@ -15,6 +15,8 @@ const meta = std.meta;
 
 const MIBIBYTE_SIZE = 1_048_576;
 
+// TODO: make all private fields, even types, start and end with '__'
+
 /// Value is taken from the spec:
 ///
 /// https://dbus.freedesktop.org/doc/dbus-specification.html#id-1.4.5
@@ -64,7 +66,7 @@ pub fn Num(comptime T: type) type {
         }
     };
 }
-pub fn isNum(comptime T: type) bool {
+pub inline fn isNum(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_NUM__");
 }
 
@@ -164,7 +166,7 @@ pub fn Struct(comptime T: type) type {
         }
     };
 }
-pub fn isStruct(comptime T: type) bool {
+pub inline fn isStruct(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_STRUCT__");
 }
 
@@ -193,7 +195,7 @@ pub fn DictEntry(comptime K: type, comptime V: type) type {
         }
     };
 }
-pub fn isDictEntry(comptime T: type) bool {
+pub inline fn isDictEntry(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_DICT_ENTRY__");
 }
 
@@ -227,7 +229,7 @@ pub fn InArray(comptime E: type) type {
         }
     };
 }
-pub fn isInArray(comptime T: type) bool {
+pub inline fn isInArray(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_IN_ARRAY__");
 }
 /// Returns the type of elements of an `InArray`.
@@ -269,7 +271,7 @@ pub fn OutArray(comptime E: type) type {
         }
     };
 }
-pub fn isOutArray(comptime T: type) bool {
+pub inline fn isOutArray(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_OUT_ARRAY__");
 }
 
@@ -322,8 +324,8 @@ pub fn StaticArray(comptime T: type) type {
     return struct {
         @"struct": T,
 
-        pub const ElemKeyType = ExpectedElemKeyType;
-        pub const ElemValueType = ExpectedElemValueType;
+        pub const __ELEM_KEY_TYPE__ = ExpectedElemKeyType;
+        pub const __ELEM_VALUE_TYPE__ = ExpectedElemValueType;
 
         // Length of `Array` is encoded as `u32`,
         // so the alignment is 4.
@@ -338,12 +340,12 @@ pub fn StaticArray(comptime T: type) type {
         }
     };
 }
-pub fn isStaticArray(comptime T: type) bool {
+pub inline fn isStaticArray(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_STATIC_ARRAY__");
 }
 /// Returns the type of comptime keys of elements of a `StaticArray`.
 pub fn StaticArrayKeyType(comptime T: type) type {
-    return T.ElemKeyType;
+    return T.__ELEM_KEY_TYPE__;
 }
 
 /// `key` is a comptime value of D-Bus type, used to
@@ -363,7 +365,7 @@ pub fn StaticArrayElem(comptime key: anytype, comptime V: type) type {
     return struct {
         elem: V,
 
-        pub const KeyType = ElemKeyType;
+        pub const __KEY_TYPE__ = ElemKeyType;
         pub const __ZBUS_ELEM_KEY__ = key;
 
         // The same as alignment of `Struct`
@@ -377,7 +379,7 @@ pub fn StaticArrayElem(comptime key: anytype, comptime V: type) type {
         }
     };
 }
-pub fn isStaticArrayElem(comptime T: type) bool {
+pub inline fn isStaticArrayElem(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_STATIC_ARRAY_ELEM__");
 }
 /// Returns the comptime key of `StaticArrayElem`.
@@ -386,7 +388,7 @@ pub fn getStaticArrayElemKey(comptime E: type) E {
 }
 /// Returns type of the comptime key of a `StaticArrayElem`.
 pub fn StaticArrayElemKeyType(comptime T: type) type {
-    return T.KeyType;
+    return T.__KEY_TYPE__;
 }
 
 /// `U` is a union of D-Bus types. Union must be tagged.
@@ -420,7 +422,7 @@ pub fn Variant(comptime U: type) type {
         }
     };
 }
-pub fn isVariant(comptime T: type) bool {
+pub inline fn isVariant(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_VARIANT__");
 }
 
@@ -449,7 +451,7 @@ pub fn StaticVariant(comptime T: type) type {
         }
     };
 }
-pub fn isStaticVariant(comptime T: type) bool {
+pub inline fn isStaticVariant(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_STATIC_VARIANT__");
 }
 
@@ -587,10 +589,10 @@ fn signatureFromTypeInner(
                 if (next_struct_depth > MAX_STRUCT_DEPTH)
                     @compileError("Reached max struct depth");
 
-                const ElemKeyType = T.ElKeyType;
+                const ElemKeyType = StaticArrayKeyType(T);
                 const key_signature = signatureFromTypeInner(ElemKeyType, next_array_depth, next_struct_depth);
 
-                const ElemValueType = T.ElValueType;
+                const ElemValueType = T.ElValueType; // TODO
                 const value_signature = signatureFromTypeInner(ElemValueType, next_array_depth, next_struct_depth);
 
                 return "a(" ++ key_signature ++ value_signature ++ ")";
