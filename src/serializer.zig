@@ -1,22 +1,33 @@
 const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
-const lang = std.lang;
 const meta = std.meta;
 const types = @import("types.zig");
-const message_types = @import("message_types.zig");
+const out_message = @import("message/out_message.zig");
+const message_types = @import("message/types.zig");
 const utils = @import("utils.zig");
 const builtin = @import("builtin");
 
 const NATIVE_ENDIAN = builtin.target.cpu.arch.endian();
 
+const MESSAGE_BODY_ALIGNMENT = 8;
+
 /// Serializes `OutMessage` into bytes as per
 /// the spec and writes the result to `writer`.
 ///
-/// UTF-8 in strings isn't validated.
-pub fn serializeMessage(writer: *Io.Writer, out_message: anytype) !void {
-    const header = out_message.header;
+/// - UTF-8 in string-like values isn't validated.
+/// - Values of signatures and object paths aren't validated.
+pub fn serializeMessage(writer: *Io.Writer, comptime M: type, message: *const M) Io.Writer.Error!void {
+    try serializeHeader(writer, message.header, 0);
 
+    const body_padding = utils.getAlignmentPadding(MESSAGE_BODY_ALIGNMENT);
+    try alignWriter(writer, body_padding);
+
+    const has_body = @hasField(message, "body");
+    if (has_body) try serializeValue(writer, message.body, NATIVE_ENDIAN);
+}
+
+inline fn serializeHeader(writer: *Io.Writer, header: out_message.Header, body_size: u32) Io.Writer.Error!void {
     const serialized_endian: u8 = switch (NATIVE_ENDIAN) {
         .little => 'l',
         .big => 'B',
@@ -29,37 +40,35 @@ pub fn serializeMessage(writer: *Io.Writer, out_message: anytype) !void {
         message_types.PROTOCOL_VERSION,
     }) |byte| try writer.writeByte(byte);
 
-    inline for (.{ header.serial, header.bodySize }) |int|
+    inline for (.{ header.serial, body_size }) |int|
         try writer.writeInt(@TypeOf(int), int, NATIVE_ENDIAN);
 
-    // `writer` is already aligned by the prev fields
-    // to serialize `StaticArray` of `header.fields`
+    // `writer` is already aligned by the header data above,
+    // so `StaticArray` of `header.fields` is serialized correctly
     try serializeValue(writer, header.fields, NATIVE_ENDIAN);
-
-    const BodyType = @FieldType(@TypeOf(out_message), "body");
-    if (BodyType != @TypeOf(null)) try serializeValue(writer, out_message.body, NATIVE_ENDIAN);
 }
 
+/// #### `writer.pos` must be already aligned by `value` alignment.
+///
 /// Recursively (for containers) serializes `value` and writes the result to `writer`.
 ///
 /// - UTF-8 in strings isn't validated.
-/// - Structure of object paths isn't validated.
+/// - Values of signatures and object paths aren't validated.
 ///
 /// Returns the amount of written bytes.
 ///
-/// It's better to use the native `endian`.
-pub fn serializeValue(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian) Io.Writer.Error!usize {
-    return serializeValueInner(writer, value, endian, 0);
+/// Serializes in the native endian.
+pub fn serializeValue(writer: *Io.Writer, value: anytype) Io.Writer.Error!usize {
+    return serializeValueInner(writer, value, 0);
 }
 
 /// `writer.pos` must be already aligned by `value` alignment.
 ///
-/// Doesn't return the amount of written value bytes.
-/// Instead, returns new, updated `pos`.
+/// Doesn't return the amount of written value bytes for `value`.
+/// Instead, returns updated absolute `pos`.
 fn serializeValueInner(
     writer: *Io.Writer,
     value: anytype,
-    comptime endian: lang.Endian,
     /// Absolute position in `writer` from serialization start.
     ///
     /// Used to align values.
@@ -67,21 +76,21 @@ fn serializeValueInner(
 ) Io.Writer.Error!usize {
     const V = @TypeOf(value);
     switch (V) {
-        types.Bool => return serializeBool(writer, value, endian, pos),
-        types.UnixFd => return serializeUnixFd(writer, value, endian, pos),
-        types.Str, types.ObjectPath, types.Signature => return serializeStrLike(writer, value, endian, pos),
+        types.Bool => return serializeBool(writer, value, pos),
+        types.UnixFd => return serializeUnixFd(writer, value, pos),
+        types.Str, types.ObjectPath, types.Signature => return serializeStrLike(writer, value, pos),
         else => {
-            if (types.isNum(V)) return serializeNum(writer, value, endian, pos);
-            if (types.isStruct(V)) return serializeStruct(writer, value, endian, pos);
-            if (types.isDictEntry(V)) return serializeDictEntry(writer, value, endian, pos);
+            if (types.isNum(V)) return serializeNum(writer, value, pos);
+            if (types.isStruct(V)) return serializeStruct(writer, value, pos);
+            if (types.isDictEntry(V)) return serializeDictEntry(writer, value, pos);
             if (types.isInArray(V)) @compileError("Cannot use `InArray` in `OutMessage`");
-            if (types.isOutArray(V)) return serializeOutArray(writer, value, endian, pos);
-            if (types.isVariant(V)) return serializeVariant(writer, value, endian, pos);
-            if (types.isStaticArray(V)) return serializeStaticArray(writer, value, endian, pos);
+            if (types.isOutArray(V)) return serializeOutArray(writer, value, pos);
+            if (types.isVariant(V)) return serializeVariant(writer, value, pos);
+            if (types.isStaticArray(V)) return serializeStaticArray(writer, value, pos);
             if (types.isStaticArrayElem(V))
                 // `StaticArrayElem` is handled in the `StaticArray` logic
                 @compileError("`StaticArrayElem` isn't allowed outside of `StaticArray`");
-            if (types.isStaticVariant(V)) return serializeStaticVariant(writer, value, endian, pos);
+            if (types.isStaticVariant(V)) return serializeStaticVariant(writer, value, pos);
 
             @compileError("Expected a D-Bus type, found " ++ @typeName(V));
         },
@@ -91,7 +100,7 @@ fn serializeValueInner(
 // Serialization functions assume that `writer` is already aligned by `value` alignment.
 // They return new, updated `pos` instead of the size of `value`
 
-inline fn serializeNum(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
+inline fn serializeNum(writer: *Io.Writer, value: anytype, pos: usize) Io.Writer.Error!usize {
     const NumType = @FieldType(@TypeOf(value), "num");
 
     if (NumType == u8) {
@@ -99,27 +108,27 @@ inline fn serializeNum(writer: *Io.Writer, value: anytype, comptime endian: lang
         return pos + 1;
     }
 
-    try writer.writeInt(NumType, value.num, endian);
+    try writer.writeInt(NumType, value.num, NATIVE_ENDIAN);
     return pos + @sizeOf(NumType);
 }
 
-inline fn serializeBool(writer: *Io.Writer, value: types.Bool, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
+inline fn serializeBool(writer: *Io.Writer, value: types.Bool, pos: usize) Io.Writer.Error!usize {
     // `Bool` is encoded as `u32`
-    try writer.writeInt(u32, @intFromBool(value.bool), endian);
+    try writer.writeInt(u32, @intFromBool(value.bool), NATIVE_ENDIAN);
 
     return pos + @sizeOf(u32);
 }
 
-inline fn serializeUnixFd(writer: *Io.Writer, value: types.UnixFd, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
+inline fn serializeUnixFd(writer: *Io.Writer, value: types.UnixFd, pos: usize) Io.Writer.Error!usize {
     const IndexType = @FieldType(types.UnixFd, "index");
 
-    try writer.writeInt(IndexType, value.index, endian);
+    try writer.writeInt(IndexType, value.index, NATIVE_ENDIAN);
 
     return pos + @sizeOf(IndexType);
 }
 
 /// Serializes string-like value (`Str`, `ObjectPath` or `Signature`).
-inline fn serializeStrLike(writer: Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
+inline fn serializeStrLike(writer: Io.Writer, value: anytype, pos: usize) Io.Writer.Error!usize {
     const V = @TypeOf(value);
 
     // Length of `Signature` is encoded as `u8`,
@@ -140,7 +149,7 @@ inline fn serializeStrLike(writer: Io.Writer, value: anytype, comptime endian: l
 
     switch (StrLenType) {
         u8 => try writer.writeByte(@intCast(str.len)),
-        else => try writer.writeInt(StrLenType, @intCast(str.len), endian),
+        else => try writer.writeInt(StrLenType, @intCast(str.len), NATIVE_ENDIAN),
     }
 
     // Include null terminator
@@ -150,7 +159,7 @@ inline fn serializeStrLike(writer: Io.Writer, value: anytype, comptime endian: l
     return pos + str_len_size + full_str.len;
 }
 
-inline fn serializeStruct(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
+inline fn serializeStruct(writer: *Io.Writer, value: anytype, pos: usize) Io.Writer.Error!usize {
     const V = @TypeOf(value);
     const info = @typeInfo(@FieldType(V, "struct")).@"struct";
 
@@ -166,26 +175,26 @@ inline fn serializeStruct(writer: *Io.Writer, value: anytype, comptime endian: l
         new_pos += padding;
 
         const field_value = @field(value.@"struct", field_name);
-        new_pos = try serializeValueInner(writer, field_value, endian, new_pos);
+        new_pos = try serializeValueInner(writer, field_value, new_pos);
     }
 
     return new_pos;
 }
 
-inline fn serializeDictEntry(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
+inline fn serializeDictEntry(writer: *Io.Writer, value: anytype, pos: usize) Io.Writer.Error!usize {
     var new_pos = pos;
 
     // Key is already aligned by `DictEntry` alignment
-    new_pos = try serializeValueInner(writer, value.key, endian, new_pos);
+    new_pos = try serializeValueInner(writer, value.key, new_pos);
 
     const value_padding = try alignValue(writer, @FieldType(value, "value"), new_pos);
     new_pos += value_padding;
-    new_pos = try serializeValueInner(writer, value.value, endian, new_pos);
+    new_pos = try serializeValueInner(writer, value.value, new_pos);
 
     return new_pos;
 }
 
-inline fn serializeOutArray(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
+inline fn serializeOutArray(writer: *Io.Writer, value: anytype, pos: usize) Io.Writer.Error!usize {
     const ArrayType = @FieldType(@TypeOf(value), "array");
     const ElemType = meta.Child(ArrayType);
 
@@ -194,7 +203,7 @@ inline fn serializeOutArray(writer: *Io.Writer, value: anytype, comptime endian:
     // Size of Array is encoded as `u32`
     const ArraySizeType = u32;
 
-    try writer.writeInt(ArraySizeType, @intCast(value.size), endian);
+    try writer.writeInt(ArraySizeType, @intCast(value.size), NATIVE_ENDIAN);
     new_pos += @sizeOf(ArraySizeType);
 
     var elem_index: usize = 0;
@@ -207,22 +216,22 @@ inline fn serializeOutArray(writer: *Io.Writer, value: anytype, comptime endian:
 
         if (elem_index == value.array.len) break;
 
-        const el = value.array[elem_index];
-        new_pos = try serializeValueInner(writer, el, endian, pos);
+        const elem = value.array[elem_index];
+        new_pos = try serializeValueInner(writer, elem, pos);
     }
 
     return new_pos;
 }
 
 /// Also handles `StaticArrayElem` inside the array.
-inline fn serializeStaticArray(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
+inline fn serializeStaticArray(writer: *Io.Writer, value: anytype, pos: usize) Io.Writer.Error!usize {
     const info = @typeInfo(@FieldType(value, "struct")).@"struct";
 
     // Size of Array is encoded as `u32`
     const ArraySizeType = u32;
 
     const array_size = countDynamicValueSize(value);
-    try writer.writeInt(ArraySizeType, @intCast(array_size), endian);
+    try writer.writeInt(ArraySizeType, @intCast(array_size), NATIVE_ENDIAN);
 
     var new_pos = pos;
     inline for (info.field_names, info.field_types) |field_name, ElemType| {
@@ -230,27 +239,27 @@ inline fn serializeStaticArray(writer: *Io.Writer, value: anytype, comptime endi
         new_pos += elem_padding;
 
         const elem_value = @field(value.@"struct", field_name);
-        new_pos = try serializeStaticArrayElem(writer, elem_value, endian, new_pos);
+        new_pos = try serializeStaticArrayElem(writer, elem_value, new_pos);
     }
 
     return new_pos;
 }
-inline fn serializeStaticArrayElem(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
+inline fn serializeStaticArrayElem(writer: *Io.Writer, value: anytype, pos: usize) Io.Writer.Error!usize {
     const V = @TypeOf(value);
 
     var new_pos = pos;
 
     // Key is already aligned by `StaticArrayElem` alignment
-    new_pos = try serializeValueInner(writer, types.getStaticArrayElemKey(V), endian, new_pos);
+    new_pos = try serializeValueInner(writer, types.getStaticArrayElemKey(V), new_pos);
 
     const value_padding = try alignValue(writer, @FieldType(V, "el"), new_pos);
     new_pos += value_padding;
-    new_pos = try serializeValueInner(writer, value.el, endian, new_pos);
+    new_pos = try serializeValueInner(writer, value.el, new_pos);
 
     return new_pos;
 }
 
-inline fn serializeVariant(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
+inline fn serializeVariant(writer: *Io.Writer, value: anytype, pos: usize) Io.Writer.Error!usize {
     const info = @typeInfo(@FieldType(value, "variant")).@"union";
 
     const TagType = info.tag_type.?;
@@ -263,11 +272,11 @@ inline fn serializeVariant(writer: *Io.Writer, value: anytype, comptime endian: 
             const field_value = @field(value, field_name);
 
             const static_variant: types.StaticVariant(FieldType) = .init(field_value);
-            return serializeStaticVariant(writer, static_variant, endian, pos);
+            return serializeStaticVariant(writer, static_variant, pos);
         }
     }
 }
-inline fn serializeStaticVariant(writer: *Io.Writer, value: anytype, comptime endian: lang.Endian, pos: usize) Io.Writer.Error!usize {
+inline fn serializeStaticVariant(writer: *Io.Writer, value: anytype, pos: usize) Io.Writer.Error!usize {
     const VariantType = @FieldType(@TypeOf(value), "variant");
 
     var new_pos = pos;
@@ -277,11 +286,11 @@ inline fn serializeStaticVariant(writer: *Io.Writer, value: anytype, comptime en
     const variant_signature: types.Signature = comptime .init(types.signatureFromType(VariantType));
 
     // `Signature` doesn't require alignment 'cause it starts from `u8` (the length)
-    new_pos = try serializeStrLike(writer, variant_signature, endian, new_pos);
+    new_pos = try serializeStrLike(writer, variant_signature, new_pos);
 
-    const variant_padding = try alignValue(writer, VariantType, endian, new_pos);
+    const variant_padding = try alignValue(writer, VariantType, new_pos);
     new_pos += variant_padding;
-    new_pos = try serializeValueInner(writer, value.variant, endian, new_pos);
+    new_pos = try serializeValueInner(writer, value.variant, new_pos);
 
     return new_pos;
 }
