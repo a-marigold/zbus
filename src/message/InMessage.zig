@@ -5,8 +5,19 @@ const lang = std.lang;
 const types = @import("../types.zig");
 const message_types = @import("types.zig");
 
+/// Raw data of a connection stream.
+///
+/// Contains bytes of `header.fields`, followed by `body_input`.
+///
+/// String-like types and `InArray` slice this `input`.
+///
+/// Used to easily free the message.
+input: []const u8,
+
 header: Header,
-body: []const u8,
+
+/// Slice of `header.input`, containing bytes of the message body.
+body_input: []const u8,
 
 pub const Header = struct {
     // TODO: consider `unsupported endian` error
@@ -30,9 +41,6 @@ pub const Header = struct {
     ///
     /// See `message_types.MessageFlags`.
     flags: u8,
-
-    /// Size of body in bytes.
-    body_size: u32,
 
     /// Serial number of the message.
     serial: u32,
