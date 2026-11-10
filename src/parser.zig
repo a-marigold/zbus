@@ -122,6 +122,13 @@ inline fn parseHeaderStart(input: *align(HEADER_START_ALIGNMENT) const [HEADER_S
     };
 }
 
+/// Frees all the memory that `parseMessage` allocated for `message`.
+///
+/// After that, accessing `message.header.fields` and parsed body is UB.
+pub inline fn freeMessage(allocator: mem.Allocator, message: *InMessage) void {
+    allocator.free(message.input);
+}
+
 fn ParseValueResult(comptime T: type) type {
     return struct {
         /// The parsed value.
