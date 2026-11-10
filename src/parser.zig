@@ -4,8 +4,8 @@ const Io = std.Io;
 const lang = std.lang;
 const meta = std.meta;
 const types = @import("types.zig");
-const message_types = @import("message_types.zig");
-const InMessage = @import("InMessage.zig");
+const message_types = @import("message/types.zig");
+const InMessage = @import("message/InMessage.zig");
 const utils = @import("utils.zig");
 
 /// Size of content of header before `Header.Fields`.
@@ -20,6 +20,51 @@ const HEADER_START_SIZE = 16;
 /// Header start has `u32` integers,
 /// so alignment is the alignment of `u32`.
 const HEADER_START_ALIGNMENT = @alignOf(u32);
+
+pub const ParseMessageError = error{
+    InvalidHeaderFormat,
+    InvalidMessageType,
+    UnsupportedVersion,
+} || ParseValueError || Io.Reader.Error || mem.Allocator.Error;
+/// Reads the next `reader` message in full and parses it into `InMessage`.
+///
+/// Allocator is used for header fields and body of the message.
+///
+/// Caller owns the memory.
+pub fn parseMessage(allocator: mem.Allocator, reader: *Io.Reader) ParseMessageError!InMessage {
+    const header_start_input: [HEADER_START_SIZE]u8 align(HEADER_START_ALIGNMENT) = block: {
+        var buffer: [HEADER_START_SIZE]u8 align(HEADER_START_ALIGNMENT) = undefined;
+        try reader.readSliceAll(&buffer);
+
+        break :block buffer;
+    };
+
+    const header_start = try parseHeaderStart(&header_start_input);
+
+    var input = block: {
+        const buffer = try allocator.alignedAlloc(u8, .@"8", header_start.fields_size + header_start.body_size);
+        try reader.readSliceAll(buffer);
+
+        break :block buffer;
+    };
+
+    const fields_input = input[0..header_start.fields_size];
+    const body_input = input[header_start.fields_size..][0..header_start.body_size];
+
+    const fields = try parseValue(InMessage.Header.Fields, fields_input, header_start.endian);
+
+    return .{
+        .input = input,
+        .header = .{
+            .endian = header_start.endian,
+            .message_type = header_start.message_type,
+            .flags = header_start.flags,
+            .serial = header_start.serial,
+            .fields = fields.value,
+        },
+        .body_input = body_input,
+    };
+}
 
 const HeaderStart = struct {
     endian: lang.Endian,
@@ -51,28 +96,13 @@ inline fn parseHeaderStart(input: *align(HEADER_START_ALIGNMENT) const [HEADER_S
     const version = input[pos];
     pos += 1;
 
-    const BodySizeType = @FieldType(InMessage.Header, "body_size");
-    const body_size = mem.readInt(
-        BodySizeType,
-        input[pos..][0..@sizeOf(BodySizeType)],
-        endian,
-    );
-    pos += @sizeOf(BodySizeType);
+    const body_size = mem.readInt(u32, input[pos..][0..@sizeOf(u32)], endian);
+    pos += @sizeOf(u32);
 
-    const SerialType = @FieldType(InMessage.Header, "serial");
-    const serial = mem.readInt(
-        SerialType,
-        input[pos..][0..@sizeOf(SerialType)],
-        endian,
-    );
-    pos += @sizeOf(SerialType);
+    const serial = mem.readInt(u32, input[pos..][0..@sizeOf(u32)], endian);
+    pos += @sizeOf(u32);
 
-    const FieldsSizeType = u32;
-    const fields_size = mem.readInt(
-        FieldsSizeType,
-        input[pos..][0..@sizeOf(FieldsSizeType)],
-        endian,
-    );
+    const fields_size = mem.readInt(u32, input[pos..][0..@sizeOf(u32)], endian);
 
     return .{
         .endian = endian,
