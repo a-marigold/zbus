@@ -40,23 +40,30 @@ pub fn parseMessage(allocator: mem.Allocator, reader: *Io.Reader) ParseMessageEr
     };
 
     const header_start = try parseHeaderStart(&header_start_input);
+    const endian = header_start.endian;
+    const fields_size = header_start.fields_size;
+    const body_size = header_start.body_size;
 
-    var input = block: {
-        const buffer = try allocator.alignedAlloc(u8, .@"8", header_start.fields_size + header_start.body_size);
+    const body_padding = utils.getAlignmentPadding(fields_size, message_types.BODY_ALIGNMENT);
+
+    const input = block: {
+        const size = fields_size + body_padding + body_size;
+
+        const buffer = try allocator.alignedAlloc(u8, .@"8", size);
         try reader.readSliceAll(buffer);
 
         break :block buffer;
     };
 
-    const fields_input = input[0..header_start.fields_size];
-    const body_input = input[header_start.fields_size..][0..header_start.body_size];
+    const fields_input = input[0..fields_size];
+    const body_input = input[fields_size..][body_padding..][0..body_size];
 
-    const fields = try parseValue(InMessage.Header.Fields, fields_input, header_start.endian);
+    const fields = try parseValue(InMessage.Header.Fields, fields_input, endian);
 
     return .{
         .input = input,
         .header = .{
-            .endian = header_start.endian,
+            .endian = endian,
             .message_type = header_start.message_type,
             .flags = header_start.flags,
             .serial = header_start.serial,

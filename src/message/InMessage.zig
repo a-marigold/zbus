@@ -19,12 +19,11 @@ header: Header,
 /// Slice of `header.input`, containing bytes of the message body.
 body_input: []const u8,
 
+/// Doesn't contain all fields from the spec:
+/// - `body_len` is `body_input.len`
+/// - `version` is handled automatically
 pub const Header = struct {
-    // TODO: consider `unsupported endian` error
-
     /// Endianness of bytes in the header and the body.
-    ///
-    /// For outcoming messages, it is recommended to use the native endian.
     ///
     /// Endianness affects only on:
     /// - Numbers

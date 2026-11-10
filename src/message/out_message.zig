@@ -14,10 +14,11 @@ pub fn OutMessage(comptime Body: ?type) type {
     return struct { header: Header };
 }
 
-/// Doesn't contain all the fields from the spec.
-///
-/// Instead, some fields are computed automatically during serialization.
-const Header = struct {
+/// Doesn't contain all fields from the spec:
+/// - endianness flag is always the native endian
+/// - body length, body signature are computed during serialization
+/// - protocol version, `fields.sender` are handled automatically
+pub const Header = struct {
     /// Type of the message.
     ///
     /// See `MessageTypes`.

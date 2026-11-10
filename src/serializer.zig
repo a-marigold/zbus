@@ -10,8 +10,6 @@ const builtin = @import("builtin");
 
 const NATIVE_ENDIAN = builtin.target.cpu.arch.endian();
 
-const MESSAGE_BODY_ALIGNMENT = 8;
-
 /// Serializes `OutMessage` into bytes as per
 /// the spec and writes the result to `writer`.
 ///
@@ -20,7 +18,7 @@ const MESSAGE_BODY_ALIGNMENT = 8;
 pub fn serializeMessage(writer: *Io.Writer, comptime M: type, message: *const M) Io.Writer.Error!void {
     try serializeHeader(writer, message.header, 0);
 
-    const body_padding = utils.getAlignmentPadding(MESSAGE_BODY_ALIGNMENT);
+    const body_padding = utils.getAlignmentPadding(message_types.BODY_ALIGNMENT);
     try alignWriter(writer, body_padding);
 
     const has_body = @hasField(message, "body");
@@ -28,7 +26,7 @@ pub fn serializeMessage(writer: *Io.Writer, comptime M: type, message: *const M)
 }
 
 inline fn serializeHeader(writer: *Io.Writer, header: out_message.Header, body_size: u32) Io.Writer.Error!void {
-    const serialized_endian: u8 = switch (NATIVE_ENDIAN) {
+    const serialized_endian: u8 = comptime switch (NATIVE_ENDIAN) {
         .little => 'l',
         .big => 'B',
     };

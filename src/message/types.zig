@@ -6,6 +6,9 @@
 /// must have only this version in the header.
 pub const PROTOCOL_VERSION = 1;
 
+/// Body of a message must always be aligned by this value.
+pub const BODY_ALIGNMENT = 8;
+
 pub const MessageType = enum(u8) {
     MethodCall = 1,
     MethodReturn = 2,
