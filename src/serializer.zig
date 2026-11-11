@@ -19,6 +19,8 @@ const NATIVE_ENDIAN = builtin.target.cpu.arch.endian();
 ///
 /// - UTF-8 in string-like values isn't validated.
 /// - Values of signatures and object paths aren't validated.
+/// - Depth of variants isn't validated, but depth of arrays and structs is validated.
+///   This can cause a stack overflow.
 pub fn serializeMessage(writer: *Io.Writer, comptime M: type, message: *const M) Io.Writer.Error!void {
     const header_size = try serializeHeader(writer, message.header, 0); // TODO: count `body_size`
 
@@ -57,6 +59,8 @@ inline fn serializeHeader(writer: *Io.Writer, header: out_message.Header, body_s
 ///
 /// - UTF-8 in strings isn't validated.
 /// - Values of signatures and object paths aren't validated.
+/// - Depth of variants isn't validated, but depth of arrays and structs is validated.
+///   This can cause a stack overflow.
 ///
 /// Returns the amount of written bytes.
 ///
@@ -168,14 +172,15 @@ inline fn serializeStruct(writer: *Io.Writer, value: anytype, pos: usize) Io.Wri
 
     var new_pos = pos;
     inline for (info.field_names, info.field_types, 0..) |field_name, FieldType, index| {
-        const padding = switch (comptime index) {
+        switch (comptime index) {
             // The first field is aligned by `Struct` alignment
-            0 => 0,
+            0 => {},
 
-            else => try alignValue(writer, FieldType, new_pos),
-        };
-
-        new_pos += padding;
+            else => {
+                const padding = try alignValue(writer, FieldType, new_pos);
+                new_pos += padding;
+            },
+        }
 
         const field_value = @field(value.@"struct", field_name);
         new_pos = try serializeValueInner(writer, field_value, new_pos);
@@ -185,12 +190,14 @@ inline fn serializeStruct(writer: *Io.Writer, value: anytype, pos: usize) Io.Wri
 }
 
 inline fn serializeDictEntry(writer: *Io.Writer, value: anytype, pos: usize) Io.Writer.Error!usize {
+    const V = @TypeOf(value);
+
     var new_pos = pos;
 
     // Key is already aligned by `DictEntry` alignment
     new_pos = try serializeValueInner(writer, value.key, new_pos);
 
-    const value_padding = try alignValue(writer, @FieldType(value, "value"), new_pos);
+    const value_padding = try alignValue(writer, @FieldType(V, "value"), new_pos);
     new_pos += value_padding;
     new_pos = try serializeValueInner(writer, value.value, new_pos);
 
@@ -239,11 +246,22 @@ inline fn serializeStaticArray(writer: *Io.Writer, value: anytype, pos: usize) I
 
     var new_pos = pos;
     inline for (info.field_names, info.field_types) |field_name, ElemType| {
-        const elem_padding = try alignValue(writer, ElemType, new_pos);
-        new_pos += elem_padding;
+        const elem = @field(value.@"struct", field_name);
 
-        const elem_value = @field(value.@"struct", field_name);
-        new_pos = try serializeStaticArrayElem(writer, elem_value, new_pos);
+        switch (@typeInfo(ElemType)) {
+            .optional => if (elem) |unwrap_elem| {
+                const elem_padding = try alignValue(writer, @TypeOf(unwrap_elem), new_pos);
+                new_pos += elem_padding;
+
+                new_pos = try serializeStaticArrayElem(writer, unwrap_elem, new_pos);
+            },
+            else => {
+                const elem_padding = try alignValue(writer, ElemType, new_pos);
+                new_pos += elem_padding;
+
+                new_pos = try serializeStaticArrayElem(writer, elem, new_pos);
+            },
+        }
     }
 
     return new_pos;
@@ -354,6 +372,7 @@ fn countStaticValueSize(comptime V: type) ?comptime_int {
     }
 }
 
+// TODO: padding
 /// Returns the size of `value` in bytes.
 ///
 /// Used for types with dynamic sizes that aren't known at comptime.
@@ -410,10 +429,20 @@ fn countDynamicValueSize(value: anytype) usize {
                 inline for (info.field_names, info.field_types) |field_name, ElemType| {
                     const elem = @field(value.@"struct", field_name);
 
-                    const elem_key = types.getStaticArrayElemKey(ElemType);
-                    const elem_value = elem.elem;
+                    switch (@typeInfo(ElemType)) {
+                        .optional => if (elem) |unwrap_elem| {
+                            const elem_key = types.getStaticArrayElemKey(@TypeOf(unwrap_elem));
+                            const elem_value = unwrap_elem.elem;
 
-                    size += countValueSize(elem_key) + countValueSize(elem_value);
+                            size += countValueSize(elem_key) + countValueSize(elem_value);
+                        },
+                        else => {
+                            const elem_key = types.getStaticArrayElemKey(ElemType);
+                            const elem_value = elem.elem;
+
+                            size += countValueSize(elem_key) + countValueSize(elem_value);
+                        },
+                    }
                 }
 
                 return size;
@@ -443,8 +472,9 @@ fn countDynamicValueSize(value: anytype) usize {
 
                 // `Variant` is encoded as `Signature` of
                 // the variant value, followed by that value
-                const variant_signature: types.Signature =
-                    comptime .init(types.signatureFromType(VariantType));
+                const variant_signature = comptime types.Signature.init(
+                    types.signatureFromType(VariantType),
+                ) catch unreachable;
 
                 return countDynamicValueSize(variant_signature) + countValueSize(value.variant);
             }

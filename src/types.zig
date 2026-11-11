@@ -7,8 +7,6 @@
 //!
 //! https://dbus.freedesktop.org/doc/dbus-specification.html#type-system
 
-// TODO: variants depth validation
-
 const std = @import("std");
 const mem = std.mem;
 const meta = std.meta;
@@ -376,12 +374,12 @@ pub inline fn isStaticArrayElem(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_STATIC_ARRAY_ELEM__");
 }
 /// Returns the comptime key of `StaticArrayElem`.
-pub fn getStaticArrayElemKey(comptime E: type) E {
+pub fn getStaticArrayElemKey(comptime E: type) StaticArrayElemKeyType(E) {
     return E.__ZBUS_ELEM_KEY__;
 }
 /// Returns type of the comptime key of a `StaticArrayElem`.
-pub fn StaticArrayElemKeyType(comptime T: type) type {
-    return T.__ZBUS_KEY_TYPE__;
+pub fn StaticArrayElemKeyType(comptime E: type) type {
+    return E.__ZBUS_KEY_TYPE__;
 }
 
 /// `U` is a union of D-Bus types. Union must be tagged.
@@ -503,7 +501,7 @@ pub inline fn validateSignature(comptime T: type, signature: []const u8) bool {
 /// - `T` isn't a D-Bus type.
 /// - `T` has more than 32 nested arrays or 32 nested structs.
 /// - `DictEntry` is outside of `Array`.
-pub fn signatureFromType(comptime T: type) [:0]const u8 {
+pub inline fn signatureFromType(comptime T: type) [:0]const u8 {
     return signatureFromTypeInner(T, 0, 0);
 }
 fn signatureFromTypeInner(
@@ -515,7 +513,7 @@ fn signatureFromTypeInner(
     /// Also includes `DictEntry`.
     struct_depth: u64,
 ) [:0]const u8 {
-    comptime switch (T) {
+    switch (T) {
         Bool => return "b",
         UnixFd => return "h",
         Str => return "s",
@@ -604,7 +602,7 @@ fn signatureFromTypeInner(
 
             @compileError("Expected a D-Bus type, found " ++ @typeName(T));
         },
-    };
+    }
 }
 
 /// Returns alignment of `T` defined in the D-Bus spec.
