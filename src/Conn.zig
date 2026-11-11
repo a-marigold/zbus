@@ -31,11 +31,12 @@ writer: net.Stream.Writer,
 pub const InitError = error{
     BusPathTooLong,
     ConnectFail,
-    SendHelloFail,
-} || AuthError;
+} || AuthError || SendHelloError;
 /// Creates a socket, connects to the D-Bus broker by `busPath`,
-/// authentificates the connection and says Hello.
-pub fn init(gpa: mem.Allocator, io: Io, bus_path: []const u8, options: Options) InitError!@This() {
+/// authentificates the connection and sends Hello.
+///
+/// Uses `allocator` to handle the Hello response.
+pub fn init(allocator: mem.Allocator, io: Io, bus_path: []const u8, options: Options) InitError!@This() {
     const socket = net.UnixAddress.init(bus_path) catch return InitError.BusPathTooLong;
 
     const stream = socket.connect(io) catch return InitError.ConnectFail;
@@ -49,48 +50,27 @@ pub fn init(gpa: mem.Allocator, io: Io, bus_path: []const u8, options: Options) 
 
     try authentificate(io_reader, io_writer, options.is_negotiate_unix_fd);
 
-    // Send hello message and the broker
-    // will assign an unique ID for this connection
-    const hello_message: OutMessage(null) = .{
-        .header = .{
-            .message_type = .MethodCall,
-            .flags = 0,
-            .serial = 1,
-            .fields = .init(.{
-                .obj_path = .init(.init(types.ObjPath.init("/org/freedesktop/DBus") catch unreachable)),
-                .interface = .init(.init(types.Str.init("org.freedesktop.DBus") catch unreachable)),
-                .method = .init(.init(types.Str.init("Hello") catch unreachable)),
-                .destination = .init(.init(types.Str.init("") catch unreachable)),
-            }),
-        },
-    };
-
-    serializer.serializeMessage(writer, hello_message) catch return InitError.SendHelloFail;
-    io_writer.flush() catch return InitError.SendHelloFail;
-
-    // TODO: handle reply
-    const hello_response = try parser.parseMessage(gpa, io_reader);
-    defer parser.freeMessage(hello_response);
+    try sendHello(allocator, io_reader, io_writer);
 
     return .{ .stream = stream, .reader = reader, .writer = writer };
 }
 pub const Options = struct {
-    /// Whether to allow passing UNIX fds over the connection.
-    comptime is_negotiate_unix_fd: bool = false,
-
     reader_buffer: []u8,
     writer_buffer: []u8,
+
+    /// Whether to allow passing UNIX fds over the connection.
+    comptime is_negotiate_unix_fd: bool = false,
 };
 
-const AuthError = error{ AuthExternalFail, NegotiateUnixFdFail };
+const AuthError = error{ AuthExternalFail, NegotiateUnixFdFail } || Io.Writer.Error || Io.Reader.DelimiterError;
 /// Authentificates the connection, and if `negotiateUnixFd`
 /// is `true`, sets up file descriptors negotiation.
 ///
 /// `reader` and `writer` are the socket reader and writer.
 inline fn authentificate(reader: *Io.Reader, writer: *Io.Writer, comptime is_negotiate_unix_fd: bool) AuthError!void {
-    // Credentials passing as per the protocol
-    writer.writeByte(0) catch return AuthError.AuthExternalFail;
-    writer.flush() catch return AuthError.AuthExternalFail;
+    // Credentials passing with null byte
+    try writer.writeByte(0);
+    try writer.flush();
 
     // `AUTH EXTERNAL` command
     const hex_ascii_uid = block: {
@@ -110,34 +90,68 @@ inline fn authentificate(reader: *Io.Reader, writer: *Io.Writer, comptime is_neg
         break :block mem.print(&buffer, "{X}", .{ascii_uid}) catch unreachable;
     };
 
-    writer.print("AUTH EXTERNAL {s}\r\n", .{hex_ascii_uid}) catch return AuthError.AuthExternalFail;
-    writer.flush() catch return AuthError.AuthExternalFail;
+    try writer.print("AUTH EXTERNAL {s}\r\n", .{hex_ascii_uid});
+    try writer.flush();
 
-    const auth_response = reader.takeDelimiterInclusive('\n') catch return AuthError.AuthExternalFail;
+    const auth_response = try reader.takeDelimiterInclusive('\n');
     if (auth_response.len < 2 or
         (auth_response[0] == 'O' and auth_response[1] == 'K')) return AuthError.AuthExternalFail;
 
     // `NEGOTIATE_UNIX_FD` command
     if (comptime is_negotiate_unix_fd) {
-        writer.writeAll("NEGOTIATE_UNIX_FD\r\n") catch return AuthError.NegotiateUnixFdFail;
-        writer.flush() catch return AuthError.NegotiateUnixFdFail;
+        try writer.writeAll("NEGOTIATE_UNIX_FD\r\n");
+        try writer.flush();
 
-        const negotiate_unix_fd_response =
-            reader.takeDelimiterInclusive('\n') catch return AuthError.NegotiateUnixFdFail;
+        const negotiate_unix_fd_response = try reader.takeDelimiterInclusive('\n');
 
         if (!mem.eql(u8, negotiate_unix_fd_response, "AGREE_UNIX_FD\r\n"))
-            return AuthError.AuthExternalFail;
+            return AuthError.NegotiateUnixFdFail;
     }
 
     // `BEGIN` command
-    writer.writeAll("BEGIN\r\n") catch return AuthError.AuthExternalFail;
-    writer.flush() catch return AuthError.AuthExternalFail;
+    try writer.writeAll("BEGIN\r\n");
+    try writer.flush();
+}
+
+const SendHelloError = error{InvalidHelloResponse} || Io.Writer.Error || Io.Reader.Error;
+/// Uses `allocator` to handle the reply of Hello.
+inline fn sendHello(allocator: mem.Allocator, reader: *Io.Reader, writer: *Io.Writer) SendHelloError!void {
+    const obj_path = types.ObjPath.init("/org/freedesktop/DBus") catch unreachable;
+    const interface = types.Str.init("org.freedesktop.DBus") catch unreachable;
+    const method = types.Str.init("Hello") catch unreachable;
+    const destination = types.Str.init("") catch unreachable;
+
+    // Send hello message and the broker
+    // will assign an unique ID for this connection
+    const hello_message: OutMessage(null) = .{
+        .header = .{
+            .message_type = .MethodCall,
+            .flags = 0,
+            .serial = 1,
+            .fields = .init(.{
+                .obj_path = .init(.init(obj_path)),
+                .interface = .init(.init(interface)),
+                .method = .init(.init(method)),
+                .destination = .init(.init(destination)),
+                .reply_serial = null,
+                .error_name = null,
+                .unix_fds = null,
+            }),
+        },
+    };
+
+    try serializer.serializeMessage(writer, @TypeOf(hello_message), &hello_message);
+    try writer.flush();
+
+    // TODO: handle reply
+    const hello_response = parser.parseMessage(allocator, reader) catch
+        return SendHelloError.InvalidHelloResponse;
+    defer parser.freeMessage(allocator, &hello_response);
 }
 
 pub inline fn getReader(self: *@This()) *Io.Reader {
     return &self.reader.interface;
 }
-
 pub inline fn getWriter(self: *@This()) *Io.Writer {
     return &self.writer.interface;
 }
