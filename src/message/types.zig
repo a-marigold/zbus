@@ -6,6 +6,19 @@
 /// must have only this version in the header.
 pub const PROTOCOL_VERSION = 1;
 
+/// The part of header before content of `fields`:
+///
+/// - Four u8: endian, message type, message flags, version
+/// - Two u32: serial, body length
+/// - One u32: size of `fields`
+pub const HEADER_START_SIZE = 16;
+
+/// The part of header before content of `fields`:
+///
+/// Header start has `u32` integers,
+/// so its alignment is the alignment of `u32`.
+pub const HEADER_START_ALIGNMENT = @alignOf(u32);
+
 /// Body of a message must always be aligned by this value.
 pub const BODY_ALIGNMENT = 8;
 

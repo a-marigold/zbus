@@ -1,3 +1,5 @@
+//! Parser `InMessage`.
+
 const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
@@ -8,32 +10,19 @@ const message_types = @import("message/types.zig");
 const InMessage = @import("message/InMessage.zig");
 const utils = @import("utils.zig");
 
-/// Size of content of header before `Header.Fields`.
-///
-/// B = the first four `u8`
-/// U = the following `u32`
-/// S = size of fields as `u32`
-///
-/// B + U + S = 16 bytes.
-const HEADER_START_SIZE = 16;
-
-/// Header start has `u32` integers,
-/// so alignment is the alignment of `u32`.
-const HEADER_START_ALIGNMENT = @alignOf(u32);
-
 pub const ParseMessageError = error{
-    InvalidHeaderFormat,
     InvalidMessageType,
     UnsupportedVersion,
-} || ParseValueError || Io.Reader.Error || mem.Allocator.Error;
+} || ParseHeaderStartError || ParseValueError || Io.Reader.Error || mem.Allocator.Error;
+
 /// Reads the next `reader` message in full and parses it into `InMessage`.
 ///
 /// Allocator is used for header fields and body of the message.
 ///
-/// Caller owns the memory.
+/// Caller owns the memory and can free it with `freeMessage`.
 pub fn parseMessage(allocator: mem.Allocator, reader: *Io.Reader) ParseMessageError!InMessage {
-    const header_start_input: [HEADER_START_SIZE]u8 align(HEADER_START_ALIGNMENT) = block: {
-        var buffer: [HEADER_START_SIZE]u8 align(HEADER_START_ALIGNMENT) = undefined;
+    const header_start_input: [message_types.HEADER_START_SIZE]u8 align(message_types.HEADER_START_ALIGNMENT) = block: {
+        var buffer: [message_types.HEADER_START_SIZE]u8 align(message_types.HEADER_START_ALIGNMENT) = undefined;
         try reader.readSliceAll(&buffer);
 
         break :block buffer;
@@ -84,7 +73,9 @@ const HeaderStart = struct {
 };
 
 const ParseHeaderStartError = error{InvalidHeaderFormat};
-inline fn parseHeaderStart(input: *align(HEADER_START_ALIGNMENT) const [HEADER_START_SIZE]u8) ParseHeaderStartError!HeaderStart {
+inline fn parseHeaderStart(
+    input: *align(message_types.HEADER_START_ALIGNMENT) const [message_types.HEADER_START_SIZE]u8,
+) ParseHeaderStartError!HeaderStart {
     comptime var pos = 0;
 
     const endian: lang.Endian = switch (input[pos]) {
@@ -122,10 +113,10 @@ inline fn parseHeaderStart(input: *align(HEADER_START_ALIGNMENT) const [HEADER_S
     };
 }
 
-/// Frees all the memory that `parseMessage` allocated for `message`.
+/// Frees memory that `parseMessage` allocated for `message`.
 ///
 /// After that, accessing `message.header.fields` and parsed body is UB.
-pub inline fn freeMessage(allocator: mem.Allocator, message: *InMessage) void {
+pub inline fn freeMessage(allocator: mem.Allocator, message: *const InMessage) void {
     allocator.free(message.input);
 }
 

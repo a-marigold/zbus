@@ -1,3 +1,5 @@
+//! Serialize `OutMessage`.
+
 const std = @import("std");
 const mem = std.mem;
 const Io = std.Io;
@@ -18,16 +20,17 @@ const NATIVE_ENDIAN = builtin.target.cpu.arch.endian();
 /// - UTF-8 in string-like values isn't validated.
 /// - Values of signatures and object paths aren't validated.
 pub fn serializeMessage(writer: *Io.Writer, comptime M: type, message: *const M) Io.Writer.Error!void {
-    try serializeHeader(writer, message.header, 0);
+    const header_size = try serializeHeader(writer, message.header, 0); // TODO: count `body_size`
 
-    const body_padding = utils.getAlignmentPadding(message_types.BODY_ALIGNMENT);
+    const body_padding = utils.getAlignmentPadding(header_size, message_types.BODY_ALIGNMENT);
     try alignWriter(writer, body_padding);
 
     const has_body = @hasField(message, "body");
     if (has_body) try serializeValue(writer, message.body, NATIVE_ENDIAN);
 }
 
-inline fn serializeHeader(writer: *Io.Writer, header: out_message.Header, body_size: u32) Io.Writer.Error!void {
+/// Returns amount of written bytes.
+inline fn serializeHeader(writer: *Io.Writer, header: out_message.Header, body_size: u32) Io.Writer.Error!usize {
     const serialized_endian: u8 = comptime switch (NATIVE_ENDIAN) {
         .little => 'l',
         .big => 'B',
@@ -43,9 +46,9 @@ inline fn serializeHeader(writer: *Io.Writer, header: out_message.Header, body_s
     inline for (.{ header.serial, body_size }) |int|
         try writer.writeInt(@TypeOf(int), int, NATIVE_ENDIAN);
 
-    // `writer` is already aligned by the header data above,
+    // `writer` is already aligned by the header start above,
     // so `StaticArray` of `header.fields` is serialized correctly
-    try serializeValue(writer, header.fields, NATIVE_ENDIAN);
+    return message_types.HEADER_START_SIZE + try serializeValue(writer, header.fields);
 }
 
 /// #### `writer.pos` must be already aligned by `value` alignment.
@@ -225,7 +228,8 @@ inline fn serializeOutArray(writer: *Io.Writer, value: anytype, pos: usize) Io.W
 
 /// Also handles `StaticArrayElem` inside the array.
 inline fn serializeStaticArray(writer: *Io.Writer, value: anytype, pos: usize) Io.Writer.Error!usize {
-    const info = @typeInfo(@FieldType(value, "struct")).@"struct";
+    const StructType = @FieldType(@TypeOf(value), "struct");
+    const info = @typeInfo(StructType).@"struct";
 
     // Size of Array is encoded as `u32`
     const ArraySizeType = u32;
