@@ -13,9 +13,8 @@ const std = @import("std");
 const mem = std.mem;
 const meta = std.meta;
 const utils = @import("utils.zig");
-const MIBIBYTE_SIZE = 1_048_576;
 
-// TODO: make all private fields, even types, start and end with '__'
+const MIBIBYTE_SIZE = 1_048_576;
 
 /// Value is taken from the spec:
 ///
@@ -211,7 +210,7 @@ pub fn InArray(comptime E: type) type {
         /// Length of it must fit 64 MiB.
         elems: []const u8,
 
-        pub const ElemType = E;
+        pub const __ELEM_TYPE__ = E;
 
         // Length of `Array` is encoded as `u32`,
         // so the alignment is 4.
@@ -234,7 +233,7 @@ pub inline fn isInArray(comptime T: type) bool {
 }
 /// Returns the type of elements of an `InArray`.
 pub fn InArrayElemType(comptime T: type) type {
-    return T.ElemType;
+    return T.__ELEM_TYPE__;
 }
 
 /// Array to be sent in an `OutMessage`.
@@ -294,12 +293,14 @@ pub fn StaticArray(comptime T: type) type {
 
     if (info.field_types.len == 0) @compileError("`StaticArray` must have at least 1 elem");
 
-    // Expect that all types of elem keys and values equal the first element type
+    // Expect that all types of elem keys and
+    // values equal the first element type
 
-    comptime var ExpectedElemKeyType: type = undefined;
-    comptime var ExpectedElemValueType: type = undefined;
+    const FirstElemType = utils.UnwrapOptional(info.field_types[0]);
+    const ExpectedElemKeyType = StaticArrayElemKeyType(FirstElemType);
+    const ExpectedElemValueType = @FieldType(FirstElemType, "elem");
 
-    inline for (info.field_types, 0..) |ElemType, index| {
+    inline for (info.field_types[1..]) |ElemType| {
         const UnwrapElemType = utils.UnwrapOptional(ElemType);
 
         if (!isStaticArrayElem(UnwrapElemType)) @compileError("Expected `StaticArrayElem`, found " ++ @typeName(T));
@@ -307,23 +308,17 @@ pub fn StaticArray(comptime T: type) type {
         const ElemKeyType = StaticArrayElemKeyType(UnwrapElemType);
         const ElemValueType = @FieldType(UnwrapElemType, "elem");
 
-        if (index == 0) {
-            ExpectedElemKeyType = ElemKeyType;
-            ExpectedElemValueType = ElemValueType;
-        } else {
-            if (!eqlTypes(ElemKeyType, ExpectedElemKeyType))
-                @compileError("Types of keys must be the same");
+        if (!eqlTypes(ElemKeyType, ExpectedElemKeyType))
+            @compileError("Types of keys must be the same");
 
-            if (!eqlTypes(ElemValueType, ExpectedElemValueType))
-                @compileError("Types of elements must be the same");
-        }
+        if (!eqlTypes(ElemValueType, ExpectedElemValueType))
+            @compileError("Types of elements must be the same");
     }
 
     return struct {
         @"struct": T,
 
         pub const __ELEM_KEY_TYPE__ = ExpectedElemKeyType;
-        pub const __ELEM_VALUE_TYPE__ = ExpectedElemValueType;
 
         // Length of `Array` is encoded as `u32`,
         // so the alignment is 4.
@@ -367,7 +362,7 @@ pub fn StaticArrayElem(comptime key: anytype, comptime V: type) type {
         pub const __ZBUS_ELEM_KEY__ = key;
 
         // The same as alignment of `Struct`
-        pub const ALIGNMENT = 8;
+        pub const __ZBUS_ALIGNMENT__ = 8;
 
         pub const __IS_ZBUS_TYPE__ = void;
         pub const __IS_ZBUS_STATIC_ARRAY_ELEM__ = void;
@@ -409,8 +404,9 @@ pub fn Variant(comptime U: type) type {
 
         // `Variant` is serialized as `Signature` of
         // the variant value, followed by that value.
+        // `Signature` doesn't require alignment, so `Variant` also doesn't.
         // Alignment of the value is handled independently
-        pub const __ZBUS_ALIGNMENT__ = alignmentFromType(Signature);
+        pub const __ZBUS_ALIGNMENT__ = 1;
 
         pub const __IS_ZBUS_TYPE__ = void;
         pub const __IS_ZBUS_VARIANT__ = void;
@@ -440,6 +436,7 @@ pub fn StaticVariant(comptime T: type) type {
         // `Signature` doesn't require alignment,
         // so `Variant` also doesn't.
         // Alignment of the value is handled independently
+        pub const __ZBUS_ALIGNMENT__ = 1;
 
         pub const __IS_ZBUS_TYPE__ = void;
         pub const __IS_ZBUS_STATIC_VARIANT__ = void;
@@ -453,7 +450,7 @@ pub inline fn isStaticVariant(comptime T: type) bool {
     return @hasDecl(T, "__IS_ZBUS_STATIC_VARIANT__");
 }
 
-/// Compares `A` and `B` D-Bus types.
+/// Checks if `A` and `B` D-Bus types have the same signature.
 fn eqlTypes(comptime A: type, comptime B: type) bool {
     return comptime if (isNum(A))
         isNum(B)
@@ -461,6 +458,8 @@ fn eqlTypes(comptime A: type, comptime B: type) bool {
         isStruct(B)
     else if (isDictEntry(A))
         isDictEntry(B)
+    else if (isInArray(A))
+        isInArray(B)
     else if (isOutArray(A))
         isOutArray(B)
     else if (isStaticArray(A))
@@ -587,11 +586,14 @@ fn signatureFromTypeInner(
                 if (next_struct_depth > MAX_STRUCT_DEPTH)
                     @compileError("Reached max struct depth");
 
+                const info = @typeInfo(@FieldType(T, "struct")).@"struct";
+
                 const ElemKeyType = StaticArrayKeyType(T);
                 const key_signature = signatureFromTypeInner(ElemKeyType, next_array_depth, next_struct_depth);
 
-                const ElemValueType = T.ElValueType; // TODO
-                const value_signature = signatureFromTypeInner(ElemValueType, next_array_depth, next_struct_depth);
+                // All elems in `StaticArray` have the same signature, so use the first elem type
+                const FirstElemValueType = utils.UnwrapOptional(info.field_types[0]);
+                const value_signature = signatureFromTypeInner(FirstElemValueType, next_array_depth, next_struct_depth);
 
                 return "a(" ++ key_signature ++ value_signature ++ ")";
             }
@@ -609,5 +611,5 @@ fn signatureFromTypeInner(
 ///
 /// It's always a power of two.
 pub fn alignmentFromType(comptime T: type) comptime_int {
-    return @field(T, "__ZBUS_ALIGNMENT__");
+    return T.__ZBUS_ALIGNMENT__;
 }
