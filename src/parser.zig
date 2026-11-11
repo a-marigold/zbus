@@ -159,7 +159,7 @@ pub const ParseValueError = error{
 /// If `T` isn't a D-Bus type, a compile error is shown.
 ///
 /// - UTF-8 in string-like values isn't validated.
-/// - Contents of `ObjectPath` and `Signature` isn't validated.
+/// - Contents of `ObjPath` and `Signature` isn't validated.
 /// - Content of alignment padding bytes isn't validated.
 ///   Garbage in padding doesn't break anything, but the spec says it's an error.
 pub inline fn parseValue(comptime T: type, input: AlignedInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
@@ -170,7 +170,7 @@ fn parseValueInner(comptime T: type, input: AlignedInput(T), endian: lang.Endian
     switch (T) {
         types.Bool => return parseBool(input, endian),
         types.UnixFd => return parseUnixFd(input, endian),
-        types.Str, types.ObjectPath, types.Signature => return parseStrLike(T, input, endian),
+        types.Str, types.ObjPath, types.Signature => return parseStrLike(T, input, endian),
         else => {
             if (types.isNum(T)) return parseNum(T, input, endian);
             if (types.isStruct(T)) return parseStruct(T, input, endian);
@@ -224,14 +224,14 @@ inline fn parseUnixFd(input: AlignedInput(types.UnixFd), endian: lang.Endian) Pa
     return .{ .value = .init(index), .size = index_size };
 }
 
-/// Parses string-like type (`Str`, `ObjectPath` or `Signature`).
+/// Parses string-like type (`Str`, `ObjPath` or `Signature`).
 inline fn parseStrLike(comptime T: type, input: AlignedInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
     // Length of `Signature` is encoded as `u8`,
-    // lengths of `Str` and `ObjectPath` are in `u32`
+    // lengths of `Str` and `ObjPath` are in `u32`
     const StrLenType = switch (T) {
-        types.Str, types.ObjectPath => u32,
+        types.Str, types.ObjPath => u32,
         types.Signature => u8,
-        else => @compileError("Expected `Str`, `ObjectPath` or `Signature`, found " ++ @typeName(T)),
+        else => @compileError("Expected `Str`, `ObjPath` or `Signature`, found " ++ @typeName(T)),
     };
 
     const str_len_size = @sizeOf(StrLenType);

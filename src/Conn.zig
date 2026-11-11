@@ -12,8 +12,9 @@ const mem = std.mem;
 const math = std.math;
 const fmt = std.fmt;
 const posix = std.posix;
-const InMessage = @import("InMessage.zig");
-const out_message = @import("out_message.zig");
+const types = @import("types.zig");
+const InMessage = @import("message/InMessage.zig");
+const out_message = @import("message/out_message.zig");
 const OutMessage = out_message.OutMessage;
 const parser = @import("parser.zig");
 const serializer = @import("serializer.zig");
@@ -52,13 +53,14 @@ pub fn init(gpa: mem.Allocator, io: Io, bus_path: []const u8, options: Options) 
     // will assign an unique ID for this connection
     const hello_message: OutMessage(null) = .{
         .header = .{
+            .message_type = .MethodCall,
             .flags = 0,
             .serial = 1,
             .fields = .init(.{
-                .object_path = .init(.init(comptime try .init("/org/freedesktop/DBus"))),
-                .interface = .init(.init("org.freedesktop.DBus")),
-                .method = .init(.init("Hello")),
-                .destination = .init(.init("")),
+                .obj_path = .init(.init(types.ObjPath.init("/org/freedesktop/DBus") catch unreachable)),
+                .interface = .init(.init(types.Str.init("org.freedesktop.DBus") catch unreachable)),
+                .method = .init(.init(types.Str.init("Hello") catch unreachable)),
+                .destination = .init(.init(types.Str.init("") catch unreachable)),
             }),
         },
     };
@@ -68,12 +70,9 @@ pub fn init(gpa: mem.Allocator, io: Io, bus_path: []const u8, options: Options) 
 
     // TODO: handle reply
     const hello_response = try parser.parseMessage(gpa, io_reader);
+    defer parser.freeMessage(hello_response);
 
-    return .{
-        .stream = stream,
-        .reader = reader,
-        .writer = writer,
-    };
+    return .{ .stream = stream, .reader = reader, .writer = writer };
 }
 pub const Options = struct {
     /// Whether to allow passing UNIX fds over the connection.

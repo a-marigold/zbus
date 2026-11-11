@@ -57,7 +57,7 @@ pub const Header = struct {
 
         const StaticVariantStr = types.StaticVariant(types.Str);
 
-        object_path: ?types.StaticArrayElem(FieldCode.init(1), types.StaticVariant(types.ObjectPath)),
+        obj_path: ?types.StaticArrayElem(FieldCode.init(1), types.StaticVariant(types.ObjPath)),
         interface: ?types.StaticArrayElem(FieldCode.init(2), StaticVariantStr),
         method: ?types.StaticArrayElem(FieldCode.init(3), StaticVariantStr),
         error_name: ?types.StaticArrayElem(FieldCode.init(4), StaticVariantStr),

@@ -22,7 +22,7 @@ const MIBIBYTE_SIZE = 1_048_576;
 const MAX_ARRAY_SIZE = 64 * MIBIBYTE_SIZE;
 
 const MAX_STR_LEN = MAX_ARRAY_SIZE;
-const MAX_OBJECT_PATH_LEN = MAX_ARRAY_SIZE;
+const MAX_OBJ_PATH_LEN = MAX_ARRAY_SIZE;
 
 /// Length of `Signature` is encoded as `u8`,
 /// so it cannot be more than 255.
@@ -108,17 +108,17 @@ pub const Str = struct {
     }
 };
 
-pub const ObjectPath = struct {
+pub const ObjPath = struct {
     /// Length of path must fit 64 MiB.
     /// For larger paths, `init` returns an error.
     path: [:0]const u8,
 
-    // Length of `ObjectPath` is encoded as `u32`, so the alignment is 4
+    // Length of `ObjPath` is encoded as `u32`, so the alignment is 4
     pub const __ZBUS_ALIGNMENT__ = 4;
 
     pub const InitError = error{TooLongPath};
     pub inline fn init(path: [:0]const u8) InitError!@This() {
-        if (path.len > MAX_OBJECT_PATH_LEN) return InitError.TooLongPath;
+        if (path.len > MAX_OBJ_PATH_LEN) return InitError.TooLongPath;
 
         return .{ .path = path };
     }
@@ -171,7 +171,7 @@ pub inline fn isStruct(comptime T: type) bool {
 
 /// Returns a D-Bus dict entry with key type `K` and value type `V`.
 ///
-/// `K` must be `Num`, `Bool`, `UnixFd`, `Str` `ObjectPath`
+/// `K` must be `Num`, `Bool`, `UnixFd`, `Str` `ObjsPath`
 /// or `Signature`, but not a container like `Struct`, `Array` or `Variant`.
 ///
 /// Dict entries must only be array elements, and if
@@ -318,7 +318,7 @@ pub fn StaticArray(comptime T: type) type {
     return struct {
         @"struct": T,
 
-        pub const __ELEM_KEY_TYPE__ = ExpectedElemKeyType;
+        pub const __ZBUS_ELEM_KEY_TYPE__ = ExpectedElemKeyType;
 
         // Length of `Array` is encoded as `u32`,
         // so the alignment is 4.
@@ -338,7 +338,7 @@ pub inline fn isStaticArray(comptime T: type) bool {
 }
 /// Returns the type of comptime keys of elements of a `StaticArray`.
 pub fn StaticArrayKeyType(comptime T: type) type {
-    return T.__ELEM_KEY_TYPE__;
+    return T.__ZBUS_ELEM_KEY_TYPE__;
 }
 
 /// `key` is a comptime value of D-Bus type, used to
@@ -358,7 +358,7 @@ pub fn StaticArrayElem(comptime key: anytype, comptime V: type) type {
     return struct {
         elem: V,
 
-        pub const __KEY_TYPE__ = ElemKeyType;
+        pub const __ZBUS_KEY_TYPE__ = ElemKeyType;
         pub const __ZBUS_ELEM_KEY__ = key;
 
         // The same as alignment of `Struct`
@@ -381,7 +381,7 @@ pub fn getStaticArrayElemKey(comptime E: type) E {
 }
 /// Returns type of the comptime key of a `StaticArrayElem`.
 pub fn StaticArrayElemKeyType(comptime T: type) type {
-    return T.__KEY_TYPE__;
+    return T.__ZBUS_KEY_TYPE__;
 }
 
 /// `U` is a union of D-Bus types. Union must be tagged.
@@ -477,17 +477,17 @@ fn eqlTypes(comptime A: type, comptime B: type) bool {
 /// Returns `true` if `T` is a D-Bus type defined in this file.
 fn isType(comptime T: type) bool {
     return switch (T) {
-        Bool, UnixFd, Str, ObjectPath, Signature => true,
+        Bool, UnixFd, Str, ObjPath, Signature => true,
         else => @hasDecl(T, "__IS_ZBUS_TYPE__"),
     };
 }
 
 /// Returns `true` if `T` is a basic D-Bus type:
 ///
-/// `Num`, `Bool`, `UnixFd`, `Str`, `ObjectPath` or `Signature`.
+/// `Num`, `Bool`, `UnixFd`, `Str`, `ObjPath` or `Signature`.
 fn isBasicType(comptime T: type) bool {
     return switch (T) {
-        Bool, UnixFd, Str, ObjectPath, Signature => true,
+        Bool, UnixFd, Str, ObjPath, Signature => true,
         else => isNum(T),
     };
 }
@@ -519,7 +519,7 @@ fn signatureFromTypeInner(
         Bool => return "b",
         UnixFd => return "h",
         Str => return "s",
-        ObjectPath => return "o",
+        ObjPath => return "o",
         Signature => return "g",
         else => {
             if (isNum(T)) return switch (@FieldType(T, "num")) {

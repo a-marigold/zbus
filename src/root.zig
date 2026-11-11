@@ -2,10 +2,10 @@ const std = @import("std");
 const testing = std.testing;
 
 const types = @import("types.zig");
-const message_types = @import("message_types.zig");
+const message_types = @import("message/types.zig");
 
-pub const InMessage = @import("InMessage.zig");
-const out_message = @import("out_message.zig");
+pub const InMessage = @import("message/InMessage.zig");
+pub const out_message = @import("message/out_message.zig");
 
 pub const parser = @import("parser.zig");
 pub const serializer = @import("serializer.zig");
@@ -16,7 +16,7 @@ pub const Num = types.Num;
 pub const Bool = types.Bool;
 pub const UnixFd = types.UnixFd;
 pub const Str = types.Str;
-pub const ObjectPath = types.ObjectPath;
+pub const ObjPath = types.ObjPath;
 pub const Signature = types.Signature;
 pub const Struct = types.Struct;
 pub const DictEntry = types.DictEntry;

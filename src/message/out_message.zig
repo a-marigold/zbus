@@ -3,6 +3,8 @@
 const types = @import("../types.zig");
 const message_types = @import("types.zig");
 
+/// `Body` is a D-Bus type of the message body.
+///
 /// If the message doesn't need a body, `Body` can be `null`.
 pub fn OutMessage(comptime Body: ?type) type {
     if (Body) |BodyType|
@@ -45,7 +47,7 @@ pub const Header = struct {
 
         const StaticVariantStr = types.StaticVariant(types.Str);
 
-        object_path: ?types.StaticArrayElem(FieldCode.init(1), types.StaticVariant(types.ObjectPath)),
+        obj_path: ?types.StaticArrayElem(FieldCode.init(1), types.StaticVariant(types.ObjPath)),
         interface: ?types.StaticArrayElem(FieldCode.init(2), StaticVariantStr),
         method: ?types.StaticArrayElem(FieldCode.init(3), StaticVariantStr),
         error_name: ?types.StaticArrayElem(FieldCode.init(4), StaticVariantStr),

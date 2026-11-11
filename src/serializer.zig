@@ -13,6 +13,8 @@ const NATIVE_ENDIAN = builtin.target.cpu.arch.endian();
 /// Serializes `OutMessage` into bytes as per
 /// the spec and writes the result to `writer`.
 ///
+/// Serializes in the native endian.
+///
 /// - UTF-8 in string-like values isn't validated.
 /// - Values of signatures and object paths aren't validated.
 pub fn serializeMessage(writer: *Io.Writer, comptime M: type, message: *const M) Io.Writer.Error!void {
@@ -76,7 +78,7 @@ fn serializeValueInner(
     switch (V) {
         types.Bool => return serializeBool(writer, value, pos),
         types.UnixFd => return serializeUnixFd(writer, value, pos),
-        types.Str, types.ObjectPath, types.Signature => return serializeStrLike(writer, value, pos),
+        types.Str, types.ObjPath, types.Signature => return serializeStrLike(writer, value, pos),
         else => {
             if (types.isNum(V)) return serializeNum(writer, value, pos);
             if (types.isStruct(V)) return serializeStruct(writer, value, pos);
@@ -125,23 +127,23 @@ inline fn serializeUnixFd(writer: *Io.Writer, value: types.UnixFd, pos: usize) I
     return pos + @sizeOf(IndexType);
 }
 
-/// Serializes string-like value (`Str`, `ObjectPath` or `Signature`).
+/// Serializes string-like value (`Str`, `ObjPath` or `Signature`).
 inline fn serializeStrLike(writer: Io.Writer, value: anytype, pos: usize) Io.Writer.Error!usize {
     const V = @TypeOf(value);
 
     // Length of `Signature` is encoded as `u8`,
-    // lengths of `Str` and `ObjectPath` are in `u32`
+    // lengths of `Str` and `ObjPath` are in `u32`
     const StrLenType = switch (V) {
-        types.Str, types.ObjectPath => u32,
+        types.Str, types.ObjPath => u32,
         types.Signature => u8,
-        else => @compileError("Expected `Str`, `ObjectPath` or `Signature`, found " ++ @typeName(V)),
+        else => @compileError("Expected `Str`, `ObjPath` or `Signature`, found " ++ @typeName(V)),
     };
 
     const str_len_size = @sizeOf(StrLenType);
 
     const str = switch (V) {
         types.Str => value.str,
-        types.ObjectPath => value.path,
+        types.ObjPath => value.path,
         else => value.signature,
     };
 
@@ -360,9 +362,9 @@ fn countDynamicValueSize(value: anytype) usize {
     const V = @TypeOf(value);
 
     return switch (V) {
-        types.Str, types.ObjectPath, types.Signature => {
+        types.Str, types.ObjPath, types.Signature => {
             // Length of `Signature` is encoded as `u8`,
-            // lengths of `Str` and `ObjectPath` are in `u32`
+            // lengths of `Str` and `ObjPath` are in `u32`
             const StrLenType = switch (V) {
                 types.Signature => u8,
                 else => u32,
@@ -370,7 +372,7 @@ fn countDynamicValueSize(value: anytype) usize {
 
             const str = switch (V) {
                 types.Str => value.str,
-                types.ObjectPath => value.path,
+                types.ObjPath => value.path,
                 else => value.signature,
             };
 
