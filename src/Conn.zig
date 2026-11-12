@@ -113,7 +113,7 @@ inline fn authentificate(reader: *Io.Reader, writer: *Io.Writer, comptime is_neg
     try writer.flush();
 }
 
-const SendHelloError = error{InvalidHelloResponse} || Io.Writer.Error || Io.Reader.Error;
+const SendHelloError = error{InvalidHelloResponse} || Io.Writer.Error || Io.Reader.Error || mem.Allocator.Error;
 /// Uses `allocator` to handle the reply of Hello.
 inline fn sendHello(allocator: mem.Allocator, reader: *Io.Reader, writer: *Io.Writer) SendHelloError!void {
     const obj_path = types.ObjPath.init("/org/freedesktop/DBus") catch unreachable;
@@ -144,8 +144,11 @@ inline fn sendHello(allocator: mem.Allocator, reader: *Io.Reader, writer: *Io.Wr
     try writer.flush();
 
     // TODO: handle reply
-    const hello_response = parser.parseMessage(allocator, reader) catch
-        return SendHelloError.InvalidHelloResponse;
+    const hello_response = parser.parseMessage(allocator, reader) catch |err| return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => SendHelloError.InvalidHelloResponse,
+    };
+
     defer parser.freeMessage(allocator, &hello_response);
 }
 
