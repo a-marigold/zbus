@@ -153,6 +153,8 @@ pub const ParseValueError = error{
 /// - Contents of `ObjPath` and `Signature` isn't validated.
 /// - Content of alignment padding bytes isn't validated.
 ///   Garbage in padding doesn't break anything, but the spec says it's an error.
+/// - Depth of variants isn't validated, but depth of arrays and structs is validated.
+///   This can cause a stack overflow.
 pub inline fn parseValue(comptime T: type, input: AlignedInput(T), endian: lang.Endian) ParseValueError!ParseValueResult(T) {
     return parseValueInner(T, input, endian);
 }
@@ -264,7 +266,7 @@ inline fn parseStruct(comptime T: type, input: AlignedInput(T), endian: lang.End
             0 => input,
 
             else => block: {
-                const field_padding = getValuePadding(remaining_input.ptr, FieldType);
+                const field_padding = utils.getValuePadding(remaining_input.ptr, FieldType);
                 break :block try alignInput(FieldType, remaining_input, field_padding);
             },
         };
@@ -291,7 +293,7 @@ inline fn parseDictEntry(comptime T: type, input: AlignedInput(T), endian: lang.
 
     const remaining_input = input[parsed_key.size..];
 
-    const value_padding = getValuePadding(remaining_input.ptr, ValueType);
+    const value_padding = utils.getValuePadding(remaining_input.ptr, ValueType);
     const aligned_input = try alignInput(ValueType, remaining_input, value_padding);
 
     const parsed_value = try parseValueInner(ValueType, aligned_input, endian);
@@ -315,7 +317,7 @@ inline fn parseInArray(comptime T: type, input: AlignedInput(T), endian: lang.En
 
     // In accordance with the spec, there must be alignment of
     // the first value even if array has no elements
-    const first_elem_padding = getValuePadding(input.ptr, ElemType);
+    const first_elem_padding = utils.getValuePadding(input.ptr, ElemType);
     if (first_elem_padding < remaining_input.len) return ParseValueError.EndOfInput;
 
     const aligned_input = remaining_input[first_elem_padding..];
@@ -361,7 +363,7 @@ inline fn parseStaticArray(comptime T: type, input: AlignedInput(T), endian: lan
     const UnwrapFirstElemType = utils.UnwrapOptional(info.field_types[0]);
 
     elems: while (remaining_input.len != 0) {
-        const elem_padding = getValuePadding(@intFromPtr(input.ptr), UnwrapFirstElemType);
+        const elem_padding = utils.getValuePadding(@intFromPtr(input.ptr), UnwrapFirstElemType);
         const aligned_input = try alignInput(ElemKeyType, remaining_input, elem_padding);
 
         // Key is aligned by `StaticArrayElem` alignment
@@ -375,7 +377,7 @@ inline fn parseStaticArray(comptime T: type, input: AlignedInput(T), endian: lan
             const elem_key = types.getStaticArrayElemKey(UnwrapElemType);
 
             if (elem_key == parsed_key.value) {
-                const value_padding = getValuePadding(@intFromPtr(input.ptr), ElemKeyType);
+                const value_padding = utils.getValuePadding(@intFromPtr(input.ptr), ElemKeyType);
                 const aligned_remaining_input = try alignInput(T, remaining_input, value_padding);
 
                 const ElemValueType = @FieldType(UnwrapElemType, "elem");
@@ -413,7 +415,7 @@ inline fn parseVariant(comptime T: type, input: AlignedInput(T), endian: lang.En
         if (mem.eql(u8, parsed_signature.value, field_signature)) {
             const remaining_input = input[parsed_signature.size..];
 
-            const field_padding = getValuePadding(input.ptr, FieldType);
+            const field_padding = utils.getValuePadding(input.ptr, FieldType);
             const aligned_input = try alignInput(FieldType, remaining_input, field_padding);
 
             const parsed_field = try parseValueInner(FieldType, aligned_input, endian);
@@ -438,7 +440,7 @@ inline fn parseStaticVariant(comptime T: type, input: AlignedInput(T), endian: l
 
     const remaining_input = input[parsed_signature.size..];
 
-    const variant_padding = getValuePadding(input.ptr, VariantType);
+    const variant_padding = utils.getValuePadding(input.ptr, VariantType);
     const aligned_input = try alignInput(VariantType, remaining_input, variant_padding);
 
     const parsed_variant = try parseValueInner(VariantType, aligned_input, endian);
@@ -463,10 +465,4 @@ inline fn alignInput(comptime T: type, input: []const u8, padding: usize) AlignI
     if (padding > input.len) return AlignInputError.EndOfInput;
 
     return @alignCast(input[padding..]);
-}
-
-/// Returns alignment padding of type of value `V`
-/// to be added to `inputAddr` to get aligned input.
-inline fn getValuePadding(input_addr: usize, comptime V: type) usize {
-    return utils.getAlignmentPadding(input_addr, types.alignmentFromType(V));
 }

@@ -418,7 +418,7 @@ fn countDynamicValueSize(value: anytype) usize {
                         // The first field is aligned by `Struct` alignment
                         0 => 0,
 
-                        else => utils.getAlignmentPadding(size, types.alignmentFromType(FieldType)),
+                        else => utils.getValuePadding(size, FieldType),
                     };
 
                     size += padding + countValueSize(FieldType);
@@ -451,7 +451,7 @@ fn countDynamicValueSize(value: anytype) usize {
             if (types.isStaticArrayElem(V)) {
                 var size: usize = 0;
 
-                const elem_padding = utils.getAlignmentPadding(size, types.alignmentFromType(V));
+                const elem_padding = utils.getValuePadding(size, V);
                 size += elem_padding;
 
                 // Key is already aligned by `StaticArrayElem` alignment
@@ -459,8 +459,7 @@ fn countDynamicValueSize(value: anytype) usize {
 
                 size += countValueSize(elem_key);
 
-                const value_padding =
-                    utils.getAlignmentPadding(size, types.alignmentFromType(@FieldType(V, "elem")));
+                const value_padding = utils.getValuePadding(size, @FieldType(V, "elem"));
                 const elem_value = value.elem;
 
                 size += value_padding + countValueSize(elem_value);
@@ -494,7 +493,7 @@ fn countDynamicValueSize(value: anytype) usize {
 
                 const signature_size = countDynamicValueSize(variant_signature);
 
-                const variant_padding = utils.getAlignmentPadding(variant_signature);
+                const variant_padding = utils.getValuePadding(signature_size, VariantType);
                 const variant_size = countValueSize(value.variant);
 
                 return signature_size + variant_padding + variant_size;
@@ -512,7 +511,8 @@ fn countDynamicValueSize(value: anytype) usize {
 ///
 /// `pos` is the number of totally written bytes to `writer`.
 inline fn alignValue(writer: *Io.Writer, comptime V: type, pos: usize) Io.Writer.Error!void {
-    const padding = utils.getAlignmentPadding(pos, types.alignmentFromType(V));
+    const padding = utils.getValuePadding(pos, V);
+
     try alignWriter(writer, padding);
 
     return padding;
